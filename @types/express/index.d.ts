@@ -1,5 +1,8 @@
+import '../user.type';
+
 declare namespace Express {
   interface Request {
-    jwtDecoded: any
+    user?: { id: string; roles?: string[];[key: string]: any };
+    jwtDecoded?: { id: string;[key: string]: any };
   }
 }

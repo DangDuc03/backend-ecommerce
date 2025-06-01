@@ -65,7 +65,7 @@ const getUsers = async (req: Request, res: Response) => {
 }
 
 const getDetailMySelf = async (req: Request, res: Response) => {
-  const userDB = await UserModel.findById(req.jwtDecoded.id)
+  const userDB = await UserModel.findById((req as any).jwtDecoded.id)
     .select({ password: 0, __v: 0 })
     .lean()
   if (userDB) {
@@ -158,7 +158,7 @@ const updateMe = async (req: Request, res: Response) => {
     },
     (value) => value === undefined || value === ''
   )
-  const userDB: any = await UserModel.findById(req.jwtDecoded.id).lean()
+  const userDB: any = await UserModel.findById((req as any).jwtDecoded.id).lean()
   if (user.password) {
     const hash_password = hashValue(password)
     if (hash_password === userDB.password) {
@@ -170,7 +170,7 @@ const updateMe = async (req: Request, res: Response) => {
     }
   }
   const updatedUserDB = await UserModel.findByIdAndUpdate(
-    req.jwtDecoded.id,
+    (req as any).jwtDecoded.id,
     user,
     { new: true }
   )
