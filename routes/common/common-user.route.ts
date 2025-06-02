@@ -5,11 +5,16 @@ import { wrapAsync } from '../../utils/response'
 import userMiddleware from '../../middleware/user.middleware'
 import helpersMiddleware from '../../middleware/helpers.middleware'
 import express from 'express'
-import { sendPromptGemini, detectIntentGemini, extractProductNameGemini } from '../../utils/gemini.service'
+import { sendPromptAI, detectIntentAI, extractProductNameAI } from '../../utils/ai.service'
 import { getContext, appendMessageToContext } from '../../utils/chatContext.service'
 import { v4 as uuidv4 } from 'uuid'
 import { ProductModel } from '../../database/models/product.model'
 import { CLIENT_RENEG_LIMIT } from 'node:tls'
+import OrderModel from '../../models/order.model'
+import { CategoryModel } from '../../database/models/category.model'
+import { PurchaseModel } from '../../database/models/purchase.model'
+import { STATUS_PURCHASE } from '../../constants/purchase'
+import { getRecentHistory, buildChatPrompt, mapCartFromPurchases, HISTORY_LIMIT } from '../../utils/chatbot.utils'
 
 declare namespace Express {
   interface Request {
@@ -33,173 +38,422 @@ commonUserRouter.put(
   wrapAsync(userController.updateMe)
 )
 
-commonUserRouter.post('/chatbot', async (req, res) => {
-  const { prompt } = req.body
-  let userId = (req as any).user && (req as any).user._id ? (req as any).user._id : undefined
-  let sessionId = req.headers['x-session-id'] || req.cookies?.sessionId
-  if (!userId && !sessionId) {
-    sessionId = uuidv4()
-    res.cookie && res.cookie('sessionId', sessionId, { httpOnly: true })
-  }
-  if (!prompt) {
-    return res.status(400).json({ message: 'Prompt is required' })
-  }
-  const intent = await detectIntentGemini(prompt)
-  const context = await getContext({ userId, sessionId })
-  const history = context?.messages || []
-  let geminiPrompt = ''
-  history.forEach(msg => {
-    geminiPrompt += `${msg.role === 'user' ? 'Người dùng' : 'Trợ lý'}: ${msg.content}\n`
-  })
-  geminiPrompt += `Người dùng: ${prompt}\nTrợ lý:`
+commonUserRouter.post(
+  '/chatbot',
+  authMiddleware.verifyAccessToken,
+  async (req, res) => {
+    const { prompt } = req.body
+    // Lấy userId từ token đã giải mã
+    let userId = (req as any).user?._id || (req as any).jwtDecoded?.id
+    let sessionId = req.headers['x-session-id'] || req.cookies?.sessionId
+    if (!userId && !sessionId) {
+      sessionId = uuidv4()
+      res.cookie && res.cookie('sessionId', sessionId, { httpOnly: true })
+    }
+    if (!prompt) {
+      return res.status(400).json({ message: 'Prompt is required' })
+    }
+    const intent = await detectIntentAI(prompt)
+    const context = await getContext({ userId, sessionId })
+    const aiHistory = getRecentHistory(context)
+    const geminiPrompt = buildChatPrompt(aiHistory, prompt)
 
-  let reply = ''
-  // Nếu intent là add_to_cart
-  if (intent === 'add_to_cart') {
-    // 1. Dùng AI trích xuất tên sản phẩm
-    const extractedName = await extractProductNameGemini(prompt)
-    // 2. Tìm sản phẩm gần đúng trong DB
-    const product = await ProductModel.findOne({ name: { $regex: extractedName, $options: 'i' } }).lean() as any
-    if (!product) {
-      reply = `Xin lỗi, cửa hàng không tìm thấy sản phẩm "${extractedName}" để thêm vào giỏ hàng.`
-    } else {
-      // 3. Thêm vào giỏ hàng trong context
-      let cart = context?.cart || []
-      // Kiểm tra đã có trong giỏ chưa
-      const existIdx = cart.findIndex((item: any) => item._id?.toString() === product._id?.toString())
-      if (existIdx > -1) {
-        cart[existIdx].quantity += 1
+    let reply = ''
+    // Các intent thao tác yêu cầu đăng nhập
+    if (['add_to_cart', 'view_cart', 'order'].includes(intent) && !userId) {
+      return res.status(401).json({ message: 'Bạn cần đăng nhập để sử dụng tính năng này.' })
+    }
+    // Nếu intent là add_to_cart
+    if (intent === 'add_to_cart') {
+      // Lưu message user vào context trước khi xử lý
+      await appendMessageToContext({
+        userId,
+        sessionId,
+        message: { role: 'user', content: prompt, timestamp: new Date() },
+        lastIntent: intent
+      })
+      // 1. Dùng AI trích xuất tên sản phẩm và số lượng (nếu có)
+      const extractPrompt = `Hãy trích xuất tên sản phẩm và số lượng từ câu sau (trả về đúng định dạng: <tên sản phẩm>|<số lượng>, nếu không có số lượng thì mặc định là 1, không giải thích):\n${prompt}`;
+      const extractResult = await sendPromptAI(extractPrompt, aiHistory);
+      // Ví dụ: "Điện Thoại Vsmart Active 3|3"
+      const [extractedName, quantityStr] = extractResult.split('|').map(s => s.trim());
+      const quantity = parseInt(quantityStr, 10) || 1;
+      // 2. Tìm sản phẩm gần đúng trong DB
+      const product = await ProductModel.findOne({ name: { $regex: extractedName, $options: 'i' } }).lean() as any
+      if (!product) {
+        reply = `Xin lỗi, cửa hàng không tìm thấy sản phẩm "${extractedName}" để thêm vào giỏ hàng.`
+        await appendMessageToContext({
+          userId,
+          sessionId,
+          message: { role: 'assistant', content: reply, timestamp: new Date() },
+          lastIntent: intent
+        })
+        return res.json({ reply, intent, sessionId })
       } else {
-        cart.push({ _id: product._id, name: product.name, price: product.price, quantity: 1 })
+        // 3. Thêm vào giỏ hàng thực tế (purchase DB)
+        // Kiểm tra đã có purchase chưa
+        let purchase = await PurchaseModel.findOne({
+          user: userId,
+          status: STATUS_PURCHASE.IN_CART,
+          product: product._id
+        })
+        if (purchase) {
+          (purchase as any).buy_count += quantity
+          await (purchase as any).save()
+        } else {
+          purchase = await PurchaseModel.create({
+            user: userId,
+            product: product._id,
+            buy_count: quantity,
+            price: product.price,
+            price_before_discount: product.price_before_discount,
+            status: STATUS_PURCHASE.IN_CART
+          })
+        }
+        // 4. Thêm vào context (giữ lại logic cũ nếu muốn đồng bộ chat)
+        let cart = context?.cart || []
+        const existIdx = cart.findIndex((item: any) => item._id?.toString() === product._id?.toString())
+        if (existIdx > -1) {
+          cart[existIdx].quantity += quantity
+        } else {
+          cart.push({ _id: product._id, name: product.name, price: product.price, quantity })
+        }
+        await appendMessageToContext({
+          userId,
+          sessionId,
+          message: { role: 'assistant', content: `Đã thêm sản phẩm "${product.name}" vào giỏ hàng của bạn.`, timestamp: new Date() },
+          lastIntent: intent,
+          cart
+        })
+        reply = `Đã thêm sản phẩm "${product.name}" vào giỏ hàng của bạn.`
+        return res.json({ reply, intent, sessionId, cart })
       }
-      // Lưu lại context với cart mới
+    }
+    // Nếu intent là search_product hoặc info
+    else if (intent === 'search_product' || intent === 'info') {
+      try {
+        // Lấy danh sách danh mục
+        const categories = await CategoryModel.find({}).lean();
+        if (!categories.length) {
+          reply = 'Hiện tại cửa hàng chưa có danh mục sản phẩm nào.';
+          return res.json({ reply, intent, sessionId });
+        }
+        const categoryList = categories.map((c: any) => `- ${c.name}`).join('\n');
+        // Kiểm tra prompt có nhắc đến danh mục cụ thể không
+        const mentionedCategory = categories.find((c: any) => prompt.toLowerCase().includes((c.name || '').toLowerCase()));
+        if (!mentionedCategory) {
+          // Nếu không nhắc đến danh mục cụ thể, trả về danh mục
+          const dataPrompt = `Dưới đây là các danh mục sản phẩm shop đang kinh doanh:\n${categoryList}\nBạn chỉ được phép trả lời dựa trên danh sách danh mục trên, không được bịa thêm. Nếu khách hỏi về sản phẩm cụ thể, hãy hướng dẫn khách chọn danh mục trước.\nCâu hỏi của khách: "${prompt}"\nHãy trả lời bằng tiếng Việt.`;
+          reply = await sendPromptAI(dataPrompt, aiHistory);
+        } else {
+          // Nếu có nhắc đến danh mục, trả về sản phẩm thuộc danh mục đó
+          const products = await ProductModel.find({ category: mentionedCategory._id }).lean();
+          if (!products.length) {
+            reply = `Hiện tại cửa hàng chưa có sản phẩm nào trong danh mục ${(mentionedCategory as any).name}.`;
+          } else {
+            const productList = products.map((p: any) => `- ${p.name} (${p.price.toLocaleString()}đ)`).join('\n');
+            const dataPrompt = `Dưới đây là các sản phẩm thuộc danh mục ${(mentionedCategory as any).name}:\n${productList}\nChỉ được phép trả lời dựa trên danh sách trên, không được bịa thêm. Câu hỏi của khách: "${prompt}"\nHãy trả lời bằng tiếng Việt.`;
+            reply = await sendPromptAI(dataPrompt, aiHistory);
+          }
+        }
+        return res.json({ reply, intent, sessionId });
+      } catch (err) {
+        console.error('Lỗi khi query danh mục/sản phẩm:', err);
+        return res.status(500).json({ message: 'Có lỗi khi truy vấn danh mục hoặc sản phẩm.' });
+      }
+    }
+    // Nếu intent là view_cart
+    else if (intent === 'view_cart') {
+      // Lấy purchases từ DB
+      const purchases = await PurchaseModel.find({
+        user: userId,
+        status: STATUS_PURCHASE.IN_CART
+      }).populate('product').lean();
+      if (!purchases.length) {
+        reply = 'Giỏ hàng của bạn hiện đang trống.';
+      } else {
+        const cartList = mapCartFromPurchases(purchases)
+        reply = `Giỏ hàng của bạn gồm:\n${cartList}`;
+      }
+      // Lưu lại hội thoại
       await appendMessageToContext({
         userId,
         sessionId,
         message: { role: 'user', content: prompt, timestamp: new Date() },
-        lastIntent: intent,
-        cart
-      })
+        lastIntent: intent
+      });
       await appendMessageToContext({
         userId,
         sessionId,
-        message: { role: 'assistant', content: `Đã thêm sản phẩm "${product.name}" vào giỏ hàng của bạn.`, timestamp: new Date() },
-        lastIntent: intent,
-        cart
-      })
-      reply = `Đã thêm sản phẩm "${product.name}" vào giỏ hàng của bạn.`
-      return res.json({ reply, intent, sessionId, cart })
+        message: { role: 'assistant', content: reply, timestamp: new Date() },
+        lastIntent: intent
+      });
+      return res.json({ reply, intent, sessionId });
     }
-  }
-  // Nếu intent là search_product
-  else if (intent === 'search_product') {
-    const products = await ProductModel.find({}).limit(10).lean()
-    if (!products || products.length === 0) {
-      reply = 'Hiện tại cửa hàng chưa có sản phẩm nào để giới thiệu cho bạn.'
-    } else {
-      const productList = products.map(p => `- ${(p as any).name} (${(p as any).price.toLocaleString()}đ)`).join('\n')
-      const dataPrompt = `Dưới đây là danh sách các mẫu điện thoại cửa hàng đang bán:\n${productList}\nChỉ được phép trả lời dựa trên danh sách trên, không được bịa thêm hoặc sử dụng kiến thức ngoài danh sách này.\nNếu khách hỏi về mẫu không có trong danh sách, hãy lịch sự thông báo là hiện cửa hàng không có mẫu đó.\nCâu hỏi của khách: \"${prompt}\"`
-      reply = await sendPromptGemini(dataPrompt)
+    // Nếu intent là check_order_status
+    else if (intent === 'check_order_status') {
+      try {
+        // Trích xuất mã đơn hàng từ prompt (24 ký tự hex)
+        const orderIdMatch = prompt.match(/[a-f0-9]{24}/);
+        if (orderIdMatch) {
+          const orderId = orderIdMatch[0];
+          const order = await OrderModel.findOne({ _id: orderId, userId }).lean();
+          if (!order) {
+            reply = `Không tìm thấy đơn hàng với mã ${orderId}.`;
+          } else {
+            const statusVi = ORDER_STATUS_VI[order.status] || order.status;
+            reply = `Trạng thái đơn hàng ${orderId}: ${statusVi}. Tổng tiền: ${order.total.toLocaleString()}đ.`;
+          }
+          await appendMessageToContext({ userId, sessionId, message: { role: 'user', content: prompt, timestamp: new Date() }, lastIntent: intent });
+          await appendMessageToContext({ userId, sessionId, message: { role: 'assistant', content: reply, timestamp: new Date() }, lastIntent: intent });
+          return res.json({ reply, intent, sessionId });
+        } else {
+          // Nếu không có mã đơn hàng, dùng AI trích xuất tên sản phẩm
+          const extractPrompt = `Hãy trích xuất tên sản phẩm từ câu sau (chỉ trả về tên, không giải thích):\n${prompt}`;
+          const productName = (await sendPromptAI(extractPrompt, aiHistory)).trim();
+          if (!productName) {
+            reply = 'Bạn vui lòng cung cấp tên sản phẩm hoặc mã đơn hàng để kiểm tra.';
+            await appendMessageToContext({ userId, sessionId, message: { role: 'user', content: prompt, timestamp: new Date() }, lastIntent: intent });
+            await appendMessageToContext({ userId, sessionId, message: { role: 'assistant', content: reply, timestamp: new Date() }, lastIntent: intent });
+            return res.json({ reply, intent, sessionId });
+          }
+          // Tìm các đơn hàng của user có chứa sản phẩm này
+          const orders = await OrderModel.find({
+            userId,
+            'items.name': { $regex: productName, $options: 'i' }
+          }).lean();
+          if (!orders.length) {
+            reply = `Không tìm thấy đơn hàng nào chứa sản phẩm "${productName}".`;
+          } else if (orders.length === 1) {
+            const order = orders[0];
+            const statusVi = ORDER_STATUS_VI[order.status] || order.status;
+            reply = `Đơn hàng ${order._id} chứa sản phẩm "${productName}" có trạng thái: ${statusVi}. Tổng tiền: ${order.total.toLocaleString()}đ.`;
+          } else {
+            reply = `Tìm thấy ${orders.length} đơn hàng chứa sản phẩm "${productName}":\n` +
+              orders.map(o => `- Mã: ${o._id}, trạng thái: ${ORDER_STATUS_VI[o.status] || o.status}, tổng: ${o.total.toLocaleString()}đ`).join('\n');
+          }
+          await appendMessageToContext({ userId, sessionId, message: { role: 'user', content: prompt, timestamp: new Date() }, lastIntent: intent });
+          await appendMessageToContext({ userId, sessionId, message: { role: 'assistant', content: reply, timestamp: new Date() }, lastIntent: intent });
+          return res.json({ reply, intent, sessionId });
+        }
+      } catch (err) {
+        console.error('Lỗi check_order_status:', err);
+        return res.status(500).json({ message: 'Xin lỗi, có lỗi xảy ra. Vui lòng thử lại sau.' });
+      }
     }
-  }
-  // Nếu intent là view_cart
-  else if (intent === 'view_cart') {
-    const cart = context?.cart || []
-    if (!cart.length) {
-      reply = 'Giỏ hàng của bạn hiện đang trống.'
-    } else {
-      const cartList = cart.map((item: any, idx: number) => `${idx + 1}. ${item.name} - ${item.quantity} x ${(item.price).toLocaleString()}đ`).join('\n')
-      reply = `Giỏ hàng của bạn gồm:\n${cartList}`
+    // Nếu intent là order
+    else if (intent === 'order') {
+      try {
+        // Dùng AI trích xuất tên sản phẩm hoặc xác định "tất cả"
+        const extractPrompt = `Hãy trích xuất tên sản phẩm muốn thanh toán từ câu sau (nếu muốn thanh toán toàn bộ thì trả về: tất cả, không giải thích):\n${prompt}`;
+        const productName = (await sendPromptAI(extractPrompt, aiHistory)).trim().toLowerCase();
+
+        // Nếu AI không trích xuất được tên sản phẩm và cũng không trả về "tất cả", hỏi lại user
+        if (!productName || productName === '...' || productName === 'không') {
+          reply = 'Bạn muốn thanh toán toàn bộ giỏ hàng hay chỉ một số sản phẩm? Vui lòng nhập tên sản phẩm hoặc chọn "tất cả".';
+          await appendMessageToContext({ userId, sessionId, message: { role: 'user', content: prompt, timestamp: new Date() }, lastIntent: intent });
+          await appendMessageToContext({ userId, sessionId, message: { role: 'assistant', content: reply, timestamp: new Date() }, lastIntent: intent });
+          return res.json({ reply, intent, sessionId });
+        }
+
+        // Nếu AI trả về "tất cả" và prompt thực sự có ý đó (dùng regex kiểm tra prompt)
+        let purchases;
+        if ((productName === 'tất cả' || productName === 'tat ca' || productName === 'all') && /(tất\s*cả|tat\s*ca|all|toàn\s*bộ|hết|checkout all|thanh toán tất cả|thanh toán hết)/i.test(prompt)) {
+          purchases = await PurchaseModel.find({ user: userId, status: STATUS_PURCHASE.IN_CART }).populate('product').lean();
+        } else if (productName === 'tất cả' || productName === 'tat ca' || productName === 'all') {
+          // Nếu AI trả về "tất cả" nhưng prompt không rõ ràng, hỏi lại user
+          reply = 'Bạn muốn thanh toán toàn bộ giỏ hàng hay chỉ một số sản phẩm? Vui lòng nhập tên sản phẩm hoặc chọn "tất cả".';
+          await appendMessageToContext({ userId, sessionId, message: { role: 'user', content: prompt, timestamp: new Date() }, lastIntent: intent });
+          await appendMessageToContext({ userId, sessionId, message: { role: 'assistant', content: reply, timestamp: new Date() }, lastIntent: intent });
+          return res.json({ reply, intent, sessionId });
+        } else {
+          // Nếu có tên sản phẩm, chỉ thanh toán sản phẩm đó
+          const product = await ProductModel.findOne({ name: { $regex: productName, $options: 'i' } }).lean();
+          if (!product) {
+            reply = `Không tìm thấy sản phẩm "${productName}" trong giỏ hàng.`;
+            await appendMessageToContext({ userId, sessionId, message: { role: 'user', content: prompt, timestamp: new Date() }, lastIntent: intent });
+            await appendMessageToContext({ userId, sessionId, message: { role: 'assistant', content: reply, timestamp: new Date() }, lastIntent: intent });
+            return res.json({ reply, intent, sessionId });
+          }
+          purchases = await PurchaseModel.find({
+            user: userId,
+            status: STATUS_PURCHASE.IN_CART,
+            product: product._id
+          }).populate('product').lean();
+        }
+
+        if (!purchases || !purchases.length) {
+          reply = 'Giỏ hàng của bạn không có sản phẩm nào phù hợp để thanh toán.';
+          await appendMessageToContext({ userId, sessionId, message: { role: 'user', content: prompt, timestamp: new Date() }, lastIntent: intent });
+          await appendMessageToContext({ userId, sessionId, message: { role: 'assistant', content: reply, timestamp: new Date() }, lastIntent: intent });
+          return res.json({ reply, intent, sessionId });
+        }
+
+        // Tạo đơn hàng thật trong DB, lưu purchaseIds
+        const purchaseIds = purchases.map((item: any) => item._id);
+        const total = purchases.reduce((sum: number, item: any) => sum + item.price * item.buy_count, 0);
+        const orderDoc = await OrderModel.create({
+          userId,
+          items: purchases.map((item: any) => ({
+            productId: item.product._id,
+            name: item.product.name,
+            price: item.price,
+            quantity: item.buy_count
+          })),
+          total,
+          status: 'pending',
+          purchaseIds
+        });
+        // Chuyển purchases sang trạng thái chờ xác nhận
+        await PurchaseModel.updateMany({
+          _id: { $in: purchaseIds },
+          user: userId,
+          status: STATUS_PURCHASE.IN_CART
+        }, { status: STATUS_PURCHASE.WAIT_FOR_CONFIRMATION });
+        const orderInfo = mapCartFromPurchases(purchases)
+        reply = `Đơn hàng của bạn đã được ghi nhận với các sản phẩm sau:\n${orderInfo}\nTổng tiền: ${total.toLocaleString()}đ.\nMã đơn hàng: ${orderDoc._id}\nCảm ơn bạn đã đặt hàng!`;
+        // Xóa giỏ hàng trong context
+        await appendMessageToContext({ userId, sessionId, message: { role: 'user', content: prompt, timestamp: new Date() }, lastIntent: intent, cart: [] });
+        await appendMessageToContext({ userId, sessionId, message: { role: 'assistant', content: reply, timestamp: new Date() }, lastIntent: intent, cart: [] });
+        return res.json({ reply, intent, sessionId, order: orderDoc });
+      } catch (err) {
+        console.error('Lỗi order:', err);
+        return res.status(500).json({ message: 'Xin lỗi, có lỗi xảy ra. Vui lòng thử lại sau.' });
+      }
     }
-    // Lưu lại hội thoại
-    await appendMessageToContext({
-      userId,
-      sessionId,
-      message: { role: 'user', content: prompt, timestamp: new Date() },
-      lastIntent: intent,
-      cart
-    })
-    await appendMessageToContext({
-      userId,
-      sessionId,
-      message: { role: 'assistant', content: reply, timestamp: new Date() },
-      lastIntent: intent,
-      cart
-    })
-    return res.json({ reply, intent, sessionId, cart })
-  }
-  // Nếu intent là order
-  else if (intent === 'order') {
-    const cart = context?.cart || []
-    if (!cart.length) {
-      reply = 'Giỏ hàng của bạn đang trống, vui lòng thêm sản phẩm trước khi đặt hàng.'
-    } else {
-      // Tạo đơn hàng demo (chỉ trả về thông tin, không lưu DB)
-      const total = cart.reduce((sum: number, item: any) => sum + item.price * item.quantity, 0)
-      const orderInfo = cart.map((item: any, idx: number) => `${idx + 1}. ${item.name} - ${item.quantity} x ${(item.price).toLocaleString()}đ`).join('\n')
-      reply = `Đơn hàng của bạn đã được ghi nhận với các sản phẩm sau:\n${orderInfo}\nTổng tiền: ${total.toLocaleString()}đ.\nCảm ơn bạn đã đặt hàng!`
-      // Xóa giỏ hàng trong context
+    // Hủy đơn hàng
+    else if (intent === 'cancel_order') {
+      const orderIdMatch = prompt.match(/[a-f0-9]{24}/);
+      if (!orderIdMatch) {
+        reply = 'Bạn vui lòng cung cấp mã đơn hàng hợp lệ (24 ký tự) để hủy.';
+        await appendMessageToContext({ userId, sessionId, message: { role: 'user', content: prompt, timestamp: new Date() }, lastIntent: intent });
+        await appendMessageToContext({ userId, sessionId, message: { role: 'assistant', content: reply, timestamp: new Date() }, lastIntent: intent });
+        return res.json({ reply, intent, sessionId });
+      }
+      const orderId = orderIdMatch[0];
+      const order = await OrderModel.findOne({ _id: orderId, userId }).lean();
+      if (!order) {
+        reply = `Không tìm thấy đơn hàng với mã ${orderId}.`;
+      } else if (order.status !== 'pending' && order.status !== ORDER_STATUS_MAP[STATUS_PURCHASE.WAIT_FOR_CONFIRMATION]) {
+        reply = `Đơn hàng ${orderId} không thể hủy vì đã chuyển sang trạng thái: ${order.status}.`;
+      } else {
+        // 1. Cập nhật trạng thái đơn hàng
+        await OrderModel.updateOne({ _id: orderId, userId }, { status: ORDER_STATUS_MAP[STATUS_PURCHASE.CANCELLED] });
+        // 2. Chỉ cập nhật purchases liên quan đến đơn hàng này
+        if (order.purchaseIds && order.purchaseIds.length > 0) {
+          await PurchaseModel.updateMany(
+            {
+              _id: { $in: order.purchaseIds },
+              user: userId,
+              status: STATUS_PURCHASE.WAIT_FOR_CONFIRMATION
+            },
+            { status: STATUS_PURCHASE.CANCELLED }
+          );
+        }
+        reply = `Đơn hàng ${orderId} đã được hủy thành công.`;
+      }
+      await appendMessageToContext({ userId, sessionId, message: { role: 'user', content: prompt, timestamp: new Date() }, lastIntent: intent });
+      await appendMessageToContext({ userId, sessionId, message: { role: 'assistant', content: reply, timestamp: new Date() }, lastIntent: intent });
+      return res.json({ reply, intent, sessionId });
+    }
+    // Thay đổi số lượng sản phẩm trong giỏ hàng
+    else if (intent === 'change_cart_quantity') {
+      // 1. Dùng AI trích xuất tên sản phẩm và số lượng mới
+      const extractPrompt = `Hãy trích xuất tên sản phẩm và số lượng mới từ câu sau (trả về đúng định dạng: <tên sản phẩm>|<số lượng>, không giải thích):\n${prompt}`;
+      const extractResult = await sendPromptAI(extractPrompt, aiHistory);
+      // Ví dụ: "Điện Thoại Vsmart Active 3|3"
+      const [productName, quantityStr] = extractResult.split('|').map(s => s.trim());
+      const quantity = parseInt(quantityStr, 10);
+
+      if (!productName || !quantity || isNaN(quantity) || quantity < 1) {
+        reply = 'Không xác định được tên sản phẩm hoặc số lượng mới. Bạn vui lòng nhập lại rõ ràng hơn.';
+        return res.json({ reply, intent, sessionId });
+      }
+
+      // 2. Tìm purchase trong DB
+      const product = await ProductModel.findOne({ name: { $regex: productName, $options: 'i' } }).lean();
+      if (!product) {
+        reply = `Không tìm thấy sản phẩm "${productName}" trong hệ thống.`;
+        return res.json({ reply, intent, sessionId });
+      }
+      const purchase = await PurchaseModel.findOne({
+        user: userId,
+        status: STATUS_PURCHASE.IN_CART,
+        product: product._id
+      });
+      if (!purchase) {
+        reply = `Sản phẩm "${productName}" không có trong giỏ hàng của bạn.`;
+        return res.json({ reply, intent, sessionId });
+      }
+
+      // 3. Cập nhật số lượng
+      (purchase as any).buy_count = quantity;
+      await (purchase as any).save();
+
+      reply = `Đã cập nhật số lượng "${productName}" trong giỏ hàng của bạn thành ${quantity} cái.`;
+      await appendMessageToContext({ userId, sessionId, message: { role: 'user', content: prompt, timestamp: new Date() }, lastIntent: intent });
+      await appendMessageToContext({ userId, sessionId, message: { role: 'assistant', content: reply, timestamp: new Date() }, lastIntent: intent });
+      return res.json({ reply, intent, sessionId });
+    }
+    // Các intent khác
+    else {
+      reply = await sendPromptAI(geminiPrompt, aiHistory)
+      // Lưu lại hội thoại
       await appendMessageToContext({
         userId,
         sessionId,
         message: { role: 'user', content: prompt, timestamp: new Date() },
-        lastIntent: intent,
-        cart: []
+        lastIntent: intent
       })
       await appendMessageToContext({
         userId,
         sessionId,
         message: { role: 'assistant', content: reply, timestamp: new Date() },
-        lastIntent: intent,
-        cart: []
+        lastIntent: intent
       })
-      return res.json({ reply, intent, sessionId, order: cart, total })
+      return res.json({ reply, intent, sessionId })
     }
-    // Lưu lại hội thoại nếu giỏ hàng trống
-    await appendMessageToContext({
-      userId,
-      sessionId,
-      message: { role: 'user', content: prompt, timestamp: new Date() },
-      lastIntent: intent,
-      cart
-    })
-    await appendMessageToContext({
-      userId,
-      sessionId,
-      message: { role: 'assistant', content: reply, timestamp: new Date() },
-      lastIntent: intent,
-      cart
-    })
-    return res.json({ reply, intent, sessionId, cart })
   }
-  else {
-    reply = await sendPromptGemini(geminiPrompt)
+)
+
+// Lịch sử chat
+commonUserRouter.get(
+  '/chatbot/history',
+  authMiddleware.verifyAccessToken,
+  async (req, res) => {
+    // Lấy userId từ token đã giải mã
+    const userId = (req as any).user?._id || (req as any).jwtDecoded?.id
+    if (!userId) {
+      return res.status(401).json({ message: 'Bạn cần đăng nhập để xem lịch sử chat.' })
+    }
+    // Lấy context theo userId
+    const context = await require('../../utils/chatContext.service').getContext({ userId })
+    const history = context?.messages || []
+    res.json({ history })
   }
+)
 
-  await appendMessageToContext({
-    userId,
-    sessionId,
-    message: { role: 'user', content: prompt, timestamp: new Date() },
-    lastIntent: intent
-  })
-  await appendMessageToContext({
-    userId,
-    sessionId,
-    message: { role: 'assistant', content: reply, timestamp: new Date() },
-    lastIntent: intent
-  })
-  res.json({ reply, intent, sessionId })
-})
+// Map trạng thái số sang string cho OrderModel
+const ORDER_STATUS_MAP: Record<number, string> = {
+  [-1]: 'in_cart',
+  [0]: 'all',
+  [1]: 'wait_for_confirmation',
+  [2]: 'wait_for_getting',
+  [3]: 'in_progress',
+  [4]: 'delivered',
+  [5]: 'cancelled',
+}
 
-const router = express.Router()
-
-router.post('/chatbot', async (req, res) => {
-  const { prompt } = req.body
-  if (!prompt) {
-    return res.status(400).json({ message: 'Prompt is required' })
-  }
-  const reply = await sendPromptGemini(prompt)
-  res.json({ reply })
-})
+// Map trạng thái đơn hàng sang tiếng Việt
+const ORDER_STATUS_VI: Record<string, string> = {
+  'pending': 'Chờ xác nhận',
+  'wait_for_confirmation': 'Chờ xác nhận',
+  'wait_for_getting': 'Chờ lấy hàng',
+  'in_progress': 'Đang giao',
+  'delivered': 'Đã giao',
+  'cancelled': 'Đã hủy',
+  'in_cart': 'Trong giỏ hàng',
+  'all': 'Tất cả'
+}
 
 export default commonUserRouter
