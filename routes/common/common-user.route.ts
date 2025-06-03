@@ -169,11 +169,23 @@ commonUserRouter.post(
         user: userId,
         status: STATUS_PURCHASE.IN_CART
       }).populate('product').lean();
+      let orders = [];
       if (!purchases.length) {
         reply = 'Giỏ hàng của bạn hiện đang trống.';
       } else {
-        const cartList = mapCartFromPurchases(purchases)
-        reply = `Giỏ hàng của bạn gồm:\n${cartList}`;
+        // const cartList = mapCartFromPurchases(purchases)
+        // reply = `Giỏ hàng của bạn gồm:\n${cartList}`;
+        // Rút gọn reply, không liệt kê chi tiết sản phẩm
+        reply = `Giỏ hàng của bạn gồm ${purchases.length} sản phẩm như sau:`;
+        orders = purchases.map((item: any) => ({
+          product_id: item.product?._id?.toString() || '',
+          name: item.product?.name || '',
+          image: item.product?.image || '',
+          price: item.price,
+          quantity: item.buy_count,
+          status: 'Trong giỏ hàng',
+          product_url: item.product?.name && item.product?._id ? `${generateNameId({ name: item.product.name, id: item.product._id })}` : ''
+        }));
       }
       // Lưu lại hội thoại
       await appendMessageToContext({
@@ -185,10 +197,10 @@ commonUserRouter.post(
       await appendMessageToContext({
         userId,
         sessionId,
-        message: { role: 'assistant', content: reply, timestamp: new Date() },
+        message: { role: 'assistant', content: reply, orders, timestamp: new Date() },
         lastIntent: intent
       });
-      return res.json({ reply, intent, sessionId });
+      return res.json({ reply, intent, sessionId, orders });
     }
     // Nếu intent là check_order_status
     else if (intent === 'check_order_status') {
@@ -207,35 +219,83 @@ commonUserRouter.post(
           await appendMessageToContext({ userId, sessionId, message: { role: 'user', content: prompt, timestamp: new Date() }, lastIntent: intent });
           await appendMessageToContext({ userId, sessionId, message: { role: 'assistant', content: reply, timestamp: new Date() }, lastIntent: intent });
           return res.json({ reply, intent, sessionId });
-        } else {
-          // Nếu không có mã đơn hàng, dùng AI trích xuất tên sản phẩm
-          const extractPrompt = `Hãy trích xuất tên sản phẩm từ câu sau (chỉ trả về tên, không giải thích):\n${prompt}`;
-          const productName = (await sendPromptAI(extractPrompt, aiHistory)).trim();
-          if (!productName) {
-            reply = 'Bạn vui lòng cung cấp tên sản phẩm hoặc mã đơn hàng để kiểm tra.';
-            await appendMessageToContext({ userId, sessionId, message: { role: 'user', content: prompt, timestamp: new Date() }, lastIntent: intent });
-            await appendMessageToContext({ userId, sessionId, message: { role: 'assistant', content: reply, timestamp: new Date() }, lastIntent: intent });
-            return res.json({ reply, intent, sessionId });
-          }
-          // Tìm các đơn hàng của user có chứa sản phẩm này
-          const orders = await OrderModel.find({
-            userId,
-            'items.name': { $regex: productName, $options: 'i' }
-          }).lean();
-          if (!orders.length) {
-            reply = `Không tìm thấy đơn hàng nào chứa sản phẩm "${productName}".`;
-          } else if (orders.length === 1) {
-            const order = orders[0];
-            const statusVi = ORDER_STATUS_VI[order.status] || order.status;
-            reply = `Đơn hàng ${order._id} chứa sản phẩm "${productName}" có trạng thái: ${statusVi}. Tổng tiền: ${order.total.toLocaleString()}đ.`;
+        }
+        // Nếu không có mã đơn hàng, dùng AI trích xuất tên sản phẩm
+        const extractPrompt = `Hãy trích xuất tên sản phẩm từ câu sau (chỉ trả về tên, không giải thích):\n${prompt}`;
+        const productName = (await sendPromptAI(extractPrompt, aiHistory)).trim();
+        // Các từ khoá loại trừ và trạng thái
+        const ignoreKeywords = [
+          'lịch sử đơn hàng', 'trạng thái đơn hàng', 'đơn hàng', 'order', 'orders', 'kiểm tra đơn hàng', 'xem đơn hàng'
+        ];
+        const cancelKeywords = [
+          'đã huỷ', 'đơn hàng bị huỷ', 'đơn bị huỷ', 'canceled', 'cancelled', 'đơn huỷ'
+        ];
+        const statusKeywords = [
+          { key: 'đã giao', status: 'delivered' },
+          { key: 'chờ xác nhận', status: 'wait_for_confirmation' },
+          { key: 'chờ lấy hàng', status: 'wait_for_getting' },
+          { key: 'đang giao', status: 'in_progress' },
+        ];
+        const lowerPrompt = prompt.toLowerCase();
+        const isCancelQuery = cancelKeywords.some(keyword => lowerPrompt.includes(keyword));
+        const foundStatus = statusKeywords.find(s => lowerPrompt.includes(s.key));
+        // Nếu không có tên sản phẩm hoặc tên sản phẩm là các từ khoá loại trừ
+        if (
+          !productName ||
+          ignoreKeywords.some(keyword => productName.toLowerCase().includes(keyword)) ||
+          productName.length < 2
+        ) {
+          let ordersRaw;
+          if (isCancelQuery) {
+            // Trả về 3 đơn đã huỷ gần nhất
+            ordersRaw = await OrderModel.find({ userId, status: 'cancelled' }).sort({ createdAt: -1 }).limit(3).lean();
+            if (!ordersRaw.length) {
+              reply = 'Bạn chưa có đơn hàng nào bị huỷ.';
+            } else {
+              reply = `Đây là ${ordersRaw.length} đơn hàng bị huỷ gần nhất của bạn:\n` +
+                ordersRaw.map(o => `- Mã: ${o._id}, tổng: ${o.total.toLocaleString()}đ`).join('\n');
+            }
+          } else if (foundStatus) {
+            // Trả về 2 đơn gần nhất theo trạng thái cụ thể
+            ordersRaw = await OrderModel.find({ userId, status: foundStatus.status }).sort({ createdAt: -1 }).limit(2).lean();
+            if (!ordersRaw.length) {
+              reply = `Bạn chưa có đơn hàng nào với trạng thái "${foundStatus.key}".`;
+            } else {
+              reply = `Đây là ${ordersRaw.length} đơn hàng trạng thái "${foundStatus.key}" gần nhất của bạn:\n` +
+                ordersRaw.map(o => `- Mã: ${o._id}, tổng: ${o.total.toLocaleString()}đ`).join('\n');
+            }
           } else {
-            reply = `Tìm thấy ${orders.length} đơn hàng chứa sản phẩm "${productName}":\n` +
-              orders.map(o => `- Mã: ${o._id}, trạng thái: ${ORDER_STATUS_VI[o.status] || o.status}, tổng: ${o.total.toLocaleString()}đ`).join('\n');
+            // Trả về 2 đơn gần nhất KHÔNG bị huỷ
+            ordersRaw = await OrderModel.find({ userId, status: { $ne: 'cancelled' } }).sort({ createdAt: -1 }).limit(2).lean();
+            if (!ordersRaw.length) {
+              reply = 'Bạn chưa có đơn hàng nào.';
+            } else {
+              reply = `Đây là ${ordersRaw.length} đơn hàng gần nhất của bạn:\n` +
+                ordersRaw.map(o => `- Mã: ${o._id}, trạng thái: ${ORDER_STATUS_VI[o.status] || o.status}, tổng: ${o.total.toLocaleString()}đ`).join('\n');
+            }
           }
           await appendMessageToContext({ userId, sessionId, message: { role: 'user', content: prompt, timestamp: new Date() }, lastIntent: intent });
           await appendMessageToContext({ userId, sessionId, message: { role: 'assistant', content: reply, timestamp: new Date() }, lastIntent: intent });
           return res.json({ reply, intent, sessionId });
         }
+        // Nếu có tên sản phẩm, tìm đơn hàng chứa sản phẩm đó như cũ
+        const ordersRaw = await OrderModel.find({
+          userId,
+          'items.name': { $regex: productName, $options: 'i' }
+        }).lean();
+        if (!ordersRaw.length) {
+          reply = `Không tìm thấy đơn hàng nào chứa sản phẩm "${productName}".`;
+        } else if (ordersRaw.length === 1) {
+          const order = ordersRaw[0];
+          const statusVi = ORDER_STATUS_VI[order.status] || order.status;
+          reply = `Đơn hàng ${order._id} chứa sản phẩm "${productName}" có trạng thái: ${statusVi}. Tổng tiền: ${order.total.toLocaleString()}đ.`;
+        } else {
+          reply = `Tìm thấy ${ordersRaw.length} đơn hàng chứa sản phẩm "${productName}":\n` +
+            ordersRaw.map(o => `- Mã: ${o._id}, trạng thái: ${ORDER_STATUS_VI[o.status] || o.status}, tổng: ${o.total.toLocaleString()}đ`).join('\n');
+        }
+        await appendMessageToContext({ userId, sessionId, message: { role: 'user', content: prompt, timestamp: new Date() }, lastIntent: intent });
+        await appendMessageToContext({ userId, sessionId, message: { role: 'assistant', content: reply, timestamp: new Date() }, lastIntent: intent });
+        return res.json({ reply, intent, sessionId });
       } catch (err) {
         console.error('Lỗi check_order_status:', err);
         return res.status(500).json({ message: 'Xin lỗi, có lỗi xảy ra. Vui lòng thử lại sau.' });
@@ -244,30 +304,42 @@ commonUserRouter.post(
     // Nếu intent là order
     else if (intent === 'order') {
       try {
-        // Dùng AI trích xuất tên sản phẩm hoặc xác định "tất cả"
-        const extractPrompt = `Hãy trích xuất tên sản phẩm muốn thanh toán từ câu sau (nếu muốn thanh toán toàn bộ thì trả về: tất cả, không giải thích):\n${prompt}`;
-        const productName = (await sendPromptAI(extractPrompt, aiHistory)).trim().toLowerCase();
-
-        // Nếu AI không trích xuất được tên sản phẩm và cũng không trả về "tất cả", hỏi lại user
-        if (!productName || productName === '...' || productName === 'không') {
+        let purchases: any[] = [];
+        // Dùng AI trích xuất tên sản phẩm hoặc xác định "tất cả" hoặc nhiều sản phẩm
+        const extractPrompt = `Hãy trích xuất tên sản phẩm và số lượng muốn thanh toán từ câu sau.\n- Nếu ý định là thanh toán toàn bộ giỏ hàng, trả về: tất cả|số lượng (nếu có, nếu không có thì để trống).\n- Nếu không có tên sản phẩm, trả về rỗng.\n- Nếu có nhiều sản phẩm, trả về danh sách <tên sản phẩm>|<số lượng> cách nhau bởi dấu phẩy.\n- Không giải thích, chỉ trả về đúng định dạng.\nCâu: ${prompt}`;
+        const extractResult = (await sendPromptAI(extractPrompt, aiHistory)).trim().toLowerCase();
+        // Xử lý kết quả AI trả về
+        if (!extractResult || extractResult === 'rỗng' || extractResult === 'rong') {
           reply = 'Bạn muốn thanh toán toàn bộ giỏ hàng hay chỉ một số sản phẩm? Vui lòng nhập tên sản phẩm hoặc chọn "tất cả".';
           await appendMessageToContext({ userId, sessionId, message: { role: 'user', content: prompt, timestamp: new Date() }, lastIntent: intent });
           await appendMessageToContext({ userId, sessionId, message: { role: 'assistant', content: reply, timestamp: new Date() }, lastIntent: intent });
           return res.json({ reply, intent, sessionId });
         }
-
-        // Nếu AI trả về "tất cả" và prompt thực sự có ý đó (dùng regex kiểm tra prompt)
-        let purchases;
-        if ((productName === 'tất cả' || productName === 'tat ca' || productName === 'all') && /(tất\s*cả|tat\s*ca|all|toàn\s*bộ|hết|checkout all|thanh toán tất cả|thanh toán hết)/i.test(prompt)) {
+        // Nếu AI trả về "tất cả"
+        if (/^tất\s*cả(\|\d+)?$/.test(extractResult) || /tat\s*ca/.test(extractResult) || /all/.test(extractResult)) {
           purchases = await PurchaseModel.find({ user: userId, status: STATUS_PURCHASE.IN_CART }).populate('product').lean();
-        } else if (productName === 'tất cả' || productName === 'tat ca' || productName === 'all') {
-          // Nếu AI trả về "tất cả" nhưng prompt không rõ ràng, hỏi lại user
-          reply = 'Bạn muốn thanh toán toàn bộ giỏ hàng hay chỉ một số sản phẩm? Vui lòng nhập tên sản phẩm hoặc chọn "tất cả".';
-          await appendMessageToContext({ userId, sessionId, message: { role: 'user', content: prompt, timestamp: new Date() }, lastIntent: intent });
-          await appendMessageToContext({ userId, sessionId, message: { role: 'assistant', content: reply, timestamp: new Date() }, lastIntent: intent });
-          return res.json({ reply, intent, sessionId });
+        } else if (extractResult.includes(',')) {
+          // Nếu có nhiều sản phẩm, tách và xử lý từng sản phẩm
+          const productEntries = extractResult.split(',').map(s => s.trim()).filter(Boolean);
+          let allPurchases: any[] = [];
+          for (const entry of productEntries) {
+            const [name] = entry.split('|').map(s => s.trim());
+            const product = await ProductModel.findOne({ name: { $regex: name, $options: 'i' } }).lean();
+            if (product) {
+              const purchase = await PurchaseModel.findOne({
+                user: userId,
+                status: STATUS_PURCHASE.IN_CART,
+                product: product._id
+              }).populate('product').lean();
+              if (purchase) {
+                allPurchases.push(purchase);
+              }
+            }
+          }
+          purchases = allPurchases;
         } else {
           // Nếu có tên sản phẩm, chỉ thanh toán sản phẩm đó
+          const [productName] = extractResult.split('|').map(s => s.trim());
           const product = await ProductModel.findOne({ name: { $regex: productName, $options: 'i' } }).lean();
           if (!product) {
             reply = `Không tìm thấy sản phẩm "${productName}" trong giỏ hàng.`;
@@ -281,14 +353,12 @@ commonUserRouter.post(
             product: product._id
           }).populate('product').lean();
         }
-
         if (!purchases || !purchases.length) {
           reply = 'Giỏ hàng của bạn không có sản phẩm nào phù hợp để thanh toán.';
           await appendMessageToContext({ userId, sessionId, message: { role: 'user', content: prompt, timestamp: new Date() }, lastIntent: intent });
           await appendMessageToContext({ userId, sessionId, message: { role: 'assistant', content: reply, timestamp: new Date() }, lastIntent: intent });
           return res.json({ reply, intent, sessionId });
         }
-
         // Tạo đơn hàng thật trong DB, lưu purchaseIds
         const purchaseIds = purchases.map((item: any) => item._id);
         const total = purchases.reduce((sum: number, item: any) => sum + item.price * item.buy_count, 0);
@@ -301,7 +371,7 @@ commonUserRouter.post(
             quantity: item.buy_count
           })),
           total,
-          status: 'pending',
+          status: 'wait_for_confirmation',
           purchaseIds
         });
         // Chuyển purchases sang trạng thái chờ xác nhận
@@ -334,7 +404,7 @@ commonUserRouter.post(
       const order = await OrderModel.findOne({ _id: orderId, userId }).lean();
       if (!order) {
         reply = `Không tìm thấy đơn hàng với mã ${orderId}.`;
-      } else if (order.status !== 'pending' && order.status !== ORDER_STATUS_MAP[STATUS_PURCHASE.WAIT_FOR_CONFIRMATION]) {
+      } else if (order.status !== 'wait_for_confirmation') {
         reply = `Đơn hàng ${orderId} không thể hủy vì đã chuyển sang trạng thái: ${order.status}.`;
       } else {
         // 1. Cập nhật trạng thái đơn hàng
@@ -446,7 +516,6 @@ const ORDER_STATUS_MAP: Record<number, string> = {
 
 // Map trạng thái đơn hàng sang tiếng Việt
 const ORDER_STATUS_VI: Record<string, string> = {
-  'pending': 'Chờ xác nhận',
   'wait_for_confirmation': 'Chờ xác nhận',
   'wait_for_getting': 'Chờ lấy hàng',
   'in_progress': 'Đang giao',
@@ -454,6 +523,13 @@ const ORDER_STATUS_VI: Record<string, string> = {
   'cancelled': 'Đã hủy',
   'in_cart': 'Trong giỏ hàng',
   'all': 'Tất cả'
+}
+
+// Thêm hàm tạo product_url đúng chuẩn FE
+function generateNameId({ name, id }: { name: string; id: string }) {
+  const removeSpecialCharacter = (str: string) =>
+    str.replace(/!|@|%|\^|\*|\(|\)|\+|\=|\<|\>|\?|\/|,|\.|\:|\;|\'|\"|\&|\#|\[|\]|~|\$|_|`|-|\{|\}|\||\\/g, '')
+  return removeSpecialCharacter(name).replace(/\s/g, '-') + `-i-${id}`
 }
 
 export default commonUserRouter

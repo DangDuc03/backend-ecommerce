@@ -20,7 +20,7 @@ const OrderSchema = new Schema<IOrder>({
         }
     ],
     total: Number,
-    status: { type: String, default: 'pending' },
+    status: { type: String, default: 'wait_for_confirmation' },
     createdAt: { type: Date, default: Date.now },
     purchaseIds: [{ type: Schema.Types.ObjectId, ref: 'purchases' }]
 });

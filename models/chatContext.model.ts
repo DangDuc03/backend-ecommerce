@@ -4,6 +4,7 @@ export interface IMessage {
     role: 'user' | 'assistant';
     content: string;
     timestamp: Date;
+    orders?: any;
 }
 
 export interface IChatContext extends Document {
@@ -19,6 +20,7 @@ const MessageSchema = new Schema({
     role: { type: String, enum: ['user', 'assistant'], required: true },
     content: { type: String, required: true },
     timestamp: { type: Date, default: Date.now },
+    orders: { type: Schema.Types.Mixed, required: false },
 });
 
 const ChatContextSchema = new Schema<IChatContext>({
