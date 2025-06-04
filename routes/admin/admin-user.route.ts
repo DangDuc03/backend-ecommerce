@@ -46,4 +46,12 @@ adminUserRouter.delete(
   helpersMiddleware.idValidator,
   wrapAsync(userController.deleteUser)
 )
+// adminUserRouter.put(
+//   '/:user_id/status',
+//   authMiddleware.verifyAccessToken,
+//   authMiddleware.verifyAdmin,
+//   helpersMiddleware.idRule('user_id'),
+//   helpersMiddleware.idValidator,
+//   wrapAsync(userController.updateOnlineStatus)
+// )
 export default adminUserRouter

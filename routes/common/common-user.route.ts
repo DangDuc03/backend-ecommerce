@@ -38,6 +38,13 @@ commonUserRouter.put(
   wrapAsync(userController.updateMe)
 )
 
+commonUserRouter.put(
+  '/:user_id/status',
+  authMiddleware.verifyAccessToken,
+  helpersMiddleware.idValidator,
+  wrapAsync(userController.updateOnlineStatus)
+)
+
 commonUserRouter.post(
   '/chatbot',
   authMiddleware.verifyAccessToken,

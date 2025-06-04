@@ -83,7 +83,7 @@ const addProduct = async (req: Request, res: Response) => {
 const getProducts = async (req: Request, res: Response) => {
   let {
     page = 1,
-    limit = 30,
+    limit = 50,
     category,
     exclude,
     sort_by,

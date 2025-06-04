@@ -3,9 +3,11 @@ import { Request, Response } from 'express'
 import { responseSuccess, ErrorHandler } from '../utils/response'
 import { UserModel } from '../database/models/user.model'
 import { STATUS } from '../constants/status'
-import { omitBy } from 'lodash'
+import { omitBy, omit } from 'lodash'
 import { uploadFile } from '../utils/upload'
 import { FOLDERS, ROUTE_IMAGE } from '../constants/config'
+import { CLIENT_RENEG_LIMIT } from 'node:tls'
+
 
 const addUser = async (req: Request, res: Response) => {
   const form: User = req.body
@@ -193,6 +195,33 @@ const deleteUser = async (req: Request, res: Response) => {
   }
 }
 
+const updateOnlineStatus = async (req: Request, res: Response) => {
+  const user_Id = req.params.user_id
+  const { isOnline, lastActive } = req.body
+  // Validate input
+  if (typeof isOnline !== 'boolean' || !lastActive) {
+    throw new ErrorHandler(STATUS.UNPROCESSABLE_ENTITY, {
+      isOnline: 'Must be a boolean',
+      lastActive: 'Must be a valid date'
+    })
+  }
+
+  const user = await UserModel.findById(user_Id)
+  if (!user) {
+    throw new ErrorHandler(STATUS.NOT_FOUND, 'User not found')
+  }
+
+  (user as any).isOnline = isOnline as boolean
+  (user as any).lastActive = new Date(lastActive)
+  await user.save()
+
+  const sanitizedUser = omit(user.toObject(), ['password', '__v'])
+  return responseSuccess(res, {
+    message: 'Update online status successfully',
+    data: sanitizedUser
+  })
+}
+
 const userController = {
   addUser,
   getUsers,
@@ -202,6 +231,7 @@ const userController = {
   deleteUser,
   updateMe,
   uploadAvatar,
+  updateOnlineStatus,
 }
 
 export default userController
