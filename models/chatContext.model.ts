@@ -5,6 +5,12 @@ export interface IMessage {
     content: string;
     timestamp: Date;
     orders?: any;
+    suggestedProducts?: {
+        name: any;
+        price: any;
+        productId: any;
+        url: string;
+    }[]
 }
 
 export interface IChatContext extends Document {
@@ -21,6 +27,7 @@ const MessageSchema = new Schema({
     content: { type: String, required: true },
     timestamp: { type: Date, default: Date.now },
     orders: { type: Schema.Types.Mixed, required: false },
+    suggestedProducts: { type: Schema.Types.Mixed, required: false },
 });
 
 const ChatContextSchema = new Schema<IChatContext>({
