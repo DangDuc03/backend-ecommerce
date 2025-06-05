@@ -61,4 +61,4 @@ node build/index.js # hoặc yarn start nếu dùng ts-node
 - Đọc kỹ README và code mẫu để mở rộng nghiệp vụ.
 
 ---
-**© 2024 E-Commerce API**
+**dangcongduc © 2025 E-Commerce API**
