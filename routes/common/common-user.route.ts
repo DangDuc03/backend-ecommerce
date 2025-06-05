@@ -238,10 +238,11 @@ commonUserRouter.post(
           'đã huỷ', 'đơn hàng bị huỷ', 'đơn bị huỷ', 'canceled', 'cancelled', 'đơn huỷ'
         ];
         const statusKeywords = [
-          { key: 'đã giao', status: 'delivered' },
-          { key: 'chờ xác nhận', status: 'wait_for_confirmation' },
-          { key: 'chờ lấy hàng', status: 'wait_for_getting' },
-          { key: 'đang giao', status: 'in_progress' },
+          { key: 'đã giao', status: STATUS_PURCHASE.DELIVERED },
+          { key: 'chờ xác nhận', status: STATUS_PURCHASE.WAIT_FOR_CONFIRMATION },
+          { key: 'chờ lấy hàng', status: STATUS_PURCHASE.WAIT_FOR_GETTING },
+          { key: 'đang giao', status: STATUS_PURCHASE.IN_PROGRESS },
+          { key: 'cancelled', status: STATUS_PURCHASE.CANCELLED },
         ];
         const lowerPrompt = prompt.toLowerCase();
         const isCancelQuery = cancelKeywords.some(keyword => lowerPrompt.includes(keyword));
@@ -255,7 +256,7 @@ commonUserRouter.post(
           let ordersRaw;
           if (isCancelQuery) {
             // Trả về 3 đơn đã huỷ gần nhất
-            ordersRaw = await OrderModel.find({ userId, status: 'cancelled' }).sort({ createdAt: -1 }).limit(3).lean();
+            ordersRaw = await OrderModel.find({ userId, status: STATUS_PURCHASE.CANCELLED }).sort({ createdAt: -1 }).limit(3).lean();
             if (!ordersRaw.length) {
               reply = 'Bạn chưa có đơn hàng nào bị huỷ.';
             } else {
@@ -273,12 +274,12 @@ commonUserRouter.post(
             }
           } else {
             // Trả về 2 đơn gần nhất KHÔNG bị huỷ
-            ordersRaw = await OrderModel.find({ userId, status: { $ne: 'cancelled' } }).sort({ createdAt: -1 }).limit(2).lean();
+            ordersRaw = await OrderModel.find({ userId, status: { $ne: STATUS_PURCHASE.CANCELLED } }).sort({ createdAt: -1 }).limit(2).lean();
             if (!ordersRaw.length) {
               reply = 'Bạn chưa có đơn hàng nào.';
             } else {
               reply = `Đây là ${ordersRaw.length} đơn hàng gần nhất của bạn:\n` +
-                ordersRaw.map(o => `- Mã: ${o._id}, trạng thái: ${ORDER_STATUS_VI[o.status] || o.status}, tổng: ${o.total.toLocaleString()}đ`).join('\n');
+                ordersRaw.map(o => `- Mã: ${o._id}, trạng thái: ${ORDER_STATUS_VI[o.status]}, tổng: ${o.total.toLocaleString()}đ`).join('\n');
             }
           }
           await appendMessageToContext({ userId, sessionId, message: { role: 'user', content: prompt, timestamp: new Date() }, lastIntent: intent });
@@ -298,7 +299,7 @@ commonUserRouter.post(
           reply = `Đơn hàng ${order._id} chứa sản phẩm "${productName}" có trạng thái: ${statusVi}. Tổng tiền: ${order.total.toLocaleString()}đ.`;
         } else {
           reply = `Tìm thấy ${ordersRaw.length} đơn hàng chứa sản phẩm "${productName}":\n` +
-            ordersRaw.map(o => `- Mã: ${o._id}, trạng thái: ${ORDER_STATUS_VI[o.status] || o.status}, tổng: ${o.total.toLocaleString()}đ`).join('\n');
+            ordersRaw.map(o => `- Mã: ${o._id}, trạng thái: ${ORDER_STATUS_VI[o.status]}, tổng: ${o.total.toLocaleString()}đ`).join('\n');
         }
         await appendMessageToContext({ userId, sessionId, message: { role: 'user', content: prompt, timestamp: new Date() }, lastIntent: intent });
         await appendMessageToContext({ userId, sessionId, message: { role: 'assistant', content: reply, timestamp: new Date() }, lastIntent: intent });
@@ -378,7 +379,7 @@ commonUserRouter.post(
             quantity: item.buy_count
           })),
           total,
-          status: 'wait_for_confirmation',
+          status: STATUS_PURCHASE.WAIT_FOR_CONFIRMATION,
           purchaseIds
         });
         // Chuyển purchases sang trạng thái chờ xác nhận
@@ -411,11 +412,11 @@ commonUserRouter.post(
       const order = await OrderModel.findOne({ _id: orderId, userId }).lean();
       if (!order) {
         reply = `Không tìm thấy đơn hàng với mã ${orderId}.`;
-      } else if (order.status !== 'wait_for_confirmation') {
-        reply = `Đơn hàng ${orderId} không thể hủy vì đã chuyển sang trạng thái: ${order.status}.`;
+      } else if (order.status !== STATUS_PURCHASE.WAIT_FOR_CONFIRMATION) {
+        reply = `Đơn hàng ${orderId} không thể hủy vì đã chuyển sang trạng thái: ${ORDER_STATUS_VI[order.status]}.`;
       } else {
         // 1. Cập nhật trạng thái đơn hàng
-        await OrderModel.updateOne({ _id: orderId, userId }, { status: ORDER_STATUS_MAP[STATUS_PURCHASE.CANCELLED] });
+        await OrderModel.updateOne({ _id: orderId, userId }, { status: STATUS_PURCHASE.CANCELLED });
         // 2. Chỉ cập nhật purchases liên quan đến đơn hàng này
         if (order.purchaseIds && order.purchaseIds.length > 0) {
           await PurchaseModel.updateMany(
@@ -511,25 +512,25 @@ commonUserRouter.get(
 )
 
 // Map trạng thái số sang string cho OrderModel
-const ORDER_STATUS_MAP: Record<number, string> = {
-  [-1]: 'in_cart',
-  [0]: 'all',
-  [1]: 'wait_for_confirmation',
-  [2]: 'wait_for_getting',
-  [3]: 'in_progress',
-  [4]: 'delivered',
-  [5]: 'cancelled',
+const ORDER_STATUS_MAP: Record<number, number> = {
+  [-1]: STATUS_PURCHASE.IN_CART,
+  [0]: STATUS_PURCHASE.ALL,
+  [1]: STATUS_PURCHASE.WAIT_FOR_CONFIRMATION,
+  [2]: STATUS_PURCHASE.WAIT_FOR_GETTING,
+  [3]: STATUS_PURCHASE.IN_PROGRESS,
+  [4]: STATUS_PURCHASE.DELIVERED,
+  [5]: STATUS_PURCHASE.CANCELLED,
 }
 
 // Map trạng thái đơn hàng sang tiếng Việt
-const ORDER_STATUS_VI: Record<string, string> = {
-  'wait_for_confirmation': 'Chờ xác nhận',
-  'wait_for_getting': 'Chờ lấy hàng',
-  'in_progress': 'Đang giao',
-  'delivered': 'Đã giao',
-  'cancelled': 'Đã hủy',
-  'in_cart': 'Trong giỏ hàng',
-  'all': 'Tất cả'
+const ORDER_STATUS_VI: Record<number, string> = {
+  [-1]: 'Trong giỏ hàng',
+  [0]: 'Tất cả',
+  [1]: 'Chờ xác nhận',
+  [2]: 'Chờ lấy hàng',
+  [3]: 'Đang giao',
+  [4]: 'Đã giao',
+  [5]: 'Đã hủy',
 }
 
 // Thêm hàm tạo product_url đúng chuẩn FE
