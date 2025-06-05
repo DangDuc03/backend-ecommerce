@@ -44,3 +44,10 @@ userPurchaseRouter.get(
   authMiddleware.verifyAccessToken,
   wrapAsync(purchaseController.getPurchases)
 )
+
+// Route huỷ đơn hàng
+userPurchaseRouter.post(
+  '/orders/:orderId/cancel',
+  authMiddleware.verifyAccessToken,
+  wrapAsync(purchaseController.cancelOrder)
+)

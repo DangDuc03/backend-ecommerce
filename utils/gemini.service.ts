@@ -1,17 +1,25 @@
 import axios from 'axios';
 
-const GEMINI_API_KEY = 'AIzaSyBeBBcwTvwkPhauaVQc9CJsmlzi9FdF1yg';
-const GEMINI_API_URL = 'https://generativelanguage.googleapis.com/v1beta/models/gemini-pro:generateContent';
+const GEMINI_API_KEY = process.env.GEMINI_API_KEY || '';
+const GEMINI_API_URL = 'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent';
 
-export async function sendPromptGemini(prompt: string): Promise<string> {
+export async function sendPromptGemini(prompt: string, history: { role: string, content: string }[] = []): Promise<string> {
     try {
+        // Chỉ lấy 3-5 lượt chat gần nhất
+        const recentHistory = history.slice(-5)
+        // Build hội thoại dạng Gemini
+        let chatPrompt = ''
+        for (const msg of recentHistory) {
+            chatPrompt += `${msg.role === 'user' ? 'Người dùng' : 'Trợ lý'}: ${msg.content}\n`
+        }
+        chatPrompt += `Người dùng: ${prompt}\nTrợ lý:`
         const response = await axios.post(
             `${GEMINI_API_URL}?key=${GEMINI_API_KEY}`,
             {
                 contents: [
                     {
                         parts: [
-                            { text: prompt }
+                            { text: chatPrompt }
                         ]
                     }
                 ]
@@ -32,4 +40,4 @@ export async function sendPromptGemini(prompt: string): Promise<string> {
         console.error('Gemini API error:', error.response?.data || error.message);
         return 'Đã xảy ra lỗi khi kết nối Gemini API.';
     }
-} 
+}
