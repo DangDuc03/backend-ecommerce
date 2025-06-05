@@ -312,6 +312,14 @@ commonUserRouter.post(
     // Nếu intent là order
     else if (intent === 'order') {
       try {
+        // 1. Kiểm tra profile user
+        const userProfile = await require('../../database/models/user.model').findById(userId).lean()
+        if (!userProfile || !userProfile.name || !userProfile.phone || !userProfile.address) {
+          reply = 'Bạn cần cập nhật đầy đủ họ tên, số điện thoại và địa chỉ trước khi mua hàng. Vui lòng nhập theo cú pháp: Cập nhật tên: <tên>, SĐT: <số điện thoại>, Địa chỉ: <địa chỉ>'
+          await appendMessageToContext({ userId, sessionId, message: { role: 'user', content: prompt, timestamp: new Date() }, lastIntent: intent })
+          await appendMessageToContext({ userId, sessionId, message: { role: 'assistant', content: reply, timestamp: new Date() }, lastIntent: intent })
+          return res.json({ reply, intent, sessionId })
+        }
         let purchases: any[] = [];
         // Dùng AI trích xuất tên sản phẩm hoặc xác định "tất cả" hoặc nhiều sản phẩm
         const extractPrompt = `Hãy trích xuất tên sản phẩm và số lượng muốn thanh toán từ câu sau.\n- Nếu ý định là thanh toán toàn bộ giỏ hàng, trả về: tất cả|số lượng (nếu có, nếu không có thì để trống).\n- Nếu không có tên sản phẩm, trả về rỗng.\n- Nếu có nhiều sản phẩm, trả về danh sách <tên sản phẩm>|<số lượng> cách nhau bởi dấu phẩy.\n- Không giải thích, chỉ trả về đúng định dạng.\nCâu: ${prompt}`;
@@ -472,6 +480,86 @@ commonUserRouter.post(
       await appendMessageToContext({ userId, sessionId, message: { role: 'user', content: prompt, timestamp: new Date() }, lastIntent: intent });
       await appendMessageToContext({ userId, sessionId, message: { role: 'assistant', content: reply, timestamp: new Date() }, lastIntent: intent });
       return res.json({ reply, intent, sessionId });
+    }
+    // Nếu intent là suggest_product (gợi ý sản phẩm)
+    else if (intent === 'suggest_product') {
+      // 1. Parse giá từ prompt (nếu có)
+      let minPrice = 0, maxPrice = 0
+      const priceMatch = prompt.match(/(\d{1,3}(?:[.,]\d{3})*)(?:\s*[-đếnto]+\s*)(\d{1,3}(?:[.,]\d{3})*)/i)
+      if (priceMatch) {
+        minPrice = parseInt(priceMatch[1].replace(/\D/g, ''))
+        maxPrice = parseInt(priceMatch[2].replace(/\D/g, ''))
+      }
+      // Lấy danh sách tên danh mục
+      const categories = await CategoryModel.find({}).lean();
+      const categoryNames = categories.map((c: any) => c.name).join(', ');
+      // Dùng AI trích xuất keyword/danh mục phù hợp
+      const extractPrompt = `Danh sách danh mục sản phẩm hiện có: ${categoryNames}.\nHãy đọc câu sau và trả về duy nhất 1 từ khoá hoặc tên danh mục phù hợp nhất với ý định tìm sản phẩm của khách (chỉ trả về tên danh mục hoặc keyword, không giải thích, không thêm ký tự thừa).\nCâu: \"${prompt}\"`;
+      const extractedCategory = (await sendPromptAI(extractPrompt, aiHistory)).trim();
+      let products: any[] = [];
+      // Nếu AI trả về đúng tên danh mục, lọc theo danh mục đó
+      const matchedCategory = categories.find((c: any) => extractedCategory && extractedCategory.toLowerCase() === c.name.toLowerCase());
+      if (matchedCategory) {
+        if (minPrice && maxPrice) {
+          products = await ProductModel.find({ category: matchedCategory._id, price: { $gte: minPrice, $lte: maxPrice } }).limit(5).lean();
+        } else {
+          products = await ProductModel.find({ category: matchedCategory._id }).limit(5).lean();
+        }
+      } else {
+        if (minPrice && maxPrice) {
+          products = await ProductModel.find({ price: { $gte: minPrice, $lte: maxPrice } }).limit(5).lean();
+        } else {
+          products = await ProductModel.find({}).limit(5).lean();
+        }
+      }
+      if (!products.length) {
+        reply = matchedCategory
+          ? `Không tìm thấy sản phẩm nào thuộc danh mục ${(matchedCategory as any).name}${minPrice && maxPrice ? ` trong khoảng giá từ ${minPrice.toLocaleString()}đ đến ${maxPrice.toLocaleString()}đ` : ''}.`
+          : minPrice && maxPrice
+            ? `Không tìm thấy sản phẩm nào trong khoảng giá từ ${minPrice.toLocaleString()}đ đến ${maxPrice.toLocaleString()}đ.`
+            : 'Hiện tại cửa hàng chưa có sản phẩm nào.'
+        await appendMessageToContext({ userId, sessionId, message: { role: 'user', content: prompt, timestamp: new Date() }, lastIntent: intent })
+        await appendMessageToContext({ userId, sessionId, message: { role: 'assistant', content: reply, suggestedProducts: [], timestamp: new Date() }, lastIntent: intent })
+        return res.json({ reply, intent, sessionId, suggestedProducts: [] })
+      }
+      // Map ra mảng sản phẩm có url FE
+      const suggestedProducts = products.map((p: any) => ({
+        name: p.name,
+        price: p.price,
+        productId: p._id,
+        url: `/${generateNameId({ name: p.name, id: p._id })}`
+      }))
+      reply = matchedCategory
+        ? `Dưới đây là một số sản phẩm thuộc danh mục ${(matchedCategory as any).name}${minPrice && maxPrice ? ` trong khoảng giá từ ${minPrice.toLocaleString()}đ đến ${maxPrice.toLocaleString()}đ` : ' bạn có thể tham khảo ạ!'}:`
+        : 'Dưới đây là một số sản phẩm phù hợp:'
+      await appendMessageToContext({ userId, sessionId, message: { role: 'user', content: prompt, timestamp: new Date() }, lastIntent: intent })
+      await appendMessageToContext({ userId, sessionId, message: { role: 'assistant', content: reply, suggestedProducts, timestamp: new Date() }, lastIntent: intent })
+      return res.json({ reply, intent, sessionId, suggestedProducts })
+    }
+    // Nếu intent là update_profile (cập nhật tên, sđt, địa chỉ qua chatbot)
+    else if (intent === 'update_profile') {
+      // Dùng AI trích xuất thông tin cần cập nhật
+      const extractPrompt = `Hãy trích xuất thông tin cập nhật profile từ câu sau. Trả về đúng định dạng: tên|số điện thoại|địa chỉ. Nếu thiếu trường nào thì để trống. Không giải thích.\nCâu: ${prompt}`
+      const extractResult = (await sendPromptAI(extractPrompt, aiHistory)).trim()
+      const [name, phone, address] = extractResult.split('|').map(s => s.trim())
+      if (!name && !phone && !address) {
+        reply = 'Không xác định được thông tin cần cập nhật. Bạn vui lòng nhập rõ ràng hơn.'
+        await appendMessageToContext({ userId, sessionId, message: { role: 'user', content: prompt, timestamp: new Date() }, lastIntent: intent })
+        await appendMessageToContext({ userId, sessionId, message: { role: 'assistant', content: reply, timestamp: new Date() }, lastIntent: intent })
+        return res.json({ reply, intent, sessionId })
+      }
+      // Cập nhật profile
+      const update: any = {}
+      if (name) update.name = name
+      if (phone) update.phone = phone
+      if (address) update.address = address
+      await require('../../database/models/user.model').findByIdAndUpdate(userId, update)
+      // Fetch lại profile mới
+      const newProfile = await require('../../database/models/user.model').findById(userId).lean()
+      reply = `Đã cập nhật thông tin thành công. Thông tin mới của bạn:\n- Họ tên: ${newProfile.name || ''}\n- SĐT: ${newProfile.phone || ''}\n- Địa chỉ: ${newProfile.address || ''}`
+      await appendMessageToContext({ userId, sessionId, message: { role: 'user', content: prompt, timestamp: new Date() }, lastIntent: intent })
+      await appendMessageToContext({ userId, sessionId, message: { role: 'assistant', content: reply, timestamp: new Date() }, lastIntent: intent })
+      return res.json({ reply, intent, sessionId, profile: newProfile })
     }
     // Các intent khác
     else {
