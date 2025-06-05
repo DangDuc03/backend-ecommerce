@@ -58,7 +58,6 @@ node build/index.js # hoặc yarn start nếu dùng ts-node
 - `/chatbot`: Chatbot AI
 
 ## Đóng góp & phát triển
-- Fork, tạo branch, pull request như workflow GitHub chuẩn.
 - Đọc kỹ README và code mẫu để mở rộng nghiệp vụ.
 
 ---
