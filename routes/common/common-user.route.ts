@@ -527,7 +527,7 @@ commonUserRouter.post(
         name: p.name,
         price: p.price,
         productId: p._id,
-        url: `images/${generateNameId({ name: p.name, id: p._id })}`
+        url: `/${generateNameId({ name: p.name, id: p._id })}`
       }))
       reply = matchedCategory
         ? `Dưới đây là một số sản phẩm thuộc danh mục ${(matchedCategory as any).name}${minPrice && maxPrice ? ` trong khoảng giá từ ${minPrice.toLocaleString()}đ đến ${maxPrice.toLocaleString()}đ` : ' bạn có thể tham khảo ạ!'}:`
