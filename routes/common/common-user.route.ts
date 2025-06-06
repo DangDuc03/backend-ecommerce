@@ -15,6 +15,7 @@ import { CategoryModel } from '../../database/models/category.model'
 import { PurchaseModel } from '../../database/models/purchase.model'
 import { STATUS_PURCHASE } from '../../constants/purchase'
 import { getRecentHistory, buildChatPrompt, mapCartFromPurchases, HISTORY_LIMIT } from '../../utils/chatbot.utils'
+import { UserModel } from '../../database/models/user.model'
 
 declare namespace Express {
   interface Request {
@@ -313,12 +314,12 @@ commonUserRouter.post(
     else if (intent === 'order') {
       try {
         // 1. Kiểm tra profile user
-        const userProfile = await require('../../database/models/user.model').findById(userId).lean()
+        const userProfile: any = await UserModel.findById(userId).lean()
         if (!userProfile || !userProfile.name || !userProfile.phone || !userProfile.address) {
           reply = 'Bạn cần cập nhật đầy đủ họ tên, số điện thoại và địa chỉ trước khi mua hàng. Vui lòng nhập theo cú pháp: Cập nhật tên: <tên>, SĐT: <số điện thoại>, Địa chỉ: <địa chỉ>'
           await appendMessageToContext({ userId, sessionId, message: { role: 'user', content: prompt, timestamp: new Date() }, lastIntent: intent })
           await appendMessageToContext({ userId, sessionId, message: { role: 'assistant', content: reply, timestamp: new Date() }, lastIntent: intent })
-          return res.json({ reply, intent, sessionId })
+          return res.status(400).json({ message: reply, intent })
         }
         let purchases: any[] = [];
         // Dùng AI trích xuất tên sản phẩm hoặc xác định "tất cả" hoặc nhiều sản phẩm
@@ -378,8 +379,13 @@ commonUserRouter.post(
         // Tạo đơn hàng thật trong DB, lưu purchaseIds
         const purchaseIds = purchases.map((item: any) => item._id);
         const total = purchases.reduce((sum: number, item: any) => sum + item.price * item.buy_count, 0);
+        if (!userProfile.name) {
+          console.error('Lỗi order: userProfile không có name');
+          return res.status(500).json({ message: 'Không tìm thấy họ tên khách hàng, vui lòng cập nhật lại thông tin cá nhân.' });
+        }
         const orderDoc = await OrderModel.create({
           userId,
+          userName: userProfile.name,
           items: purchases.map((item: any) => ({
             productId: item.product._id,
             name: item.product.name,
@@ -575,28 +581,53 @@ Câu: "${prompt}"`;
     }
     // Nếu intent là update_profile (cập nhật tên, sđt, địa chỉ qua chatbot)
     else if (intent === 'update_profile') {
-      // Dùng AI trích xuất thông tin cần cập nhật
-      const extractPrompt = `Hãy trích xuất thông tin cập nhật profile từ câu sau. Trả về đúng định dạng: tên|số điện thoại|địa chỉ. Nếu thiếu trường nào thì để trống. Không giải thích.\nCâu: ${prompt}`
-      const extractResult = (await sendPromptAI(extractPrompt, aiHistory)).trim()
-      const [name, phone, address] = extractResult.split('|').map(s => s.trim())
-      if (!name && !phone && !address) {
-        reply = 'Không xác định được thông tin cần cập nhật. Bạn vui lòng nhập rõ ràng hơn.'
-        await appendMessageToContext({ userId, sessionId, message: { role: 'user', content: prompt, timestamp: new Date() }, lastIntent: intent })
-        await appendMessageToContext({ userId, sessionId, message: { role: 'assistant', content: reply, timestamp: new Date() }, lastIntent: intent })
-        return res.json({ reply, intent, sessionId })
+      try {
+        // 1. Dùng AI trích xuất thông tin từ prompt
+        const extractPrompt = `Hãy trích xuất thông tin họ tên, số điện thoại và địa chỉ từ câu sau (trả về đúng định dạng: tên|<tên>, sđt|<số điện thoại>, địa chỉ|<địa chỉ>, nếu thiếu thông tin nào thì để trống, không giải thích):\n${prompt}`;
+        const extractResult = await sendPromptAI(extractPrompt, aiHistory);
+        const infoMap = new Map();
+        extractResult.split(',').forEach(item => {
+          const [key, value] = item.split('|').map(s => s.trim());
+          if (key && value) infoMap.set(key, value);
+        });
+
+        // 2. Cập nhật thông tin vào DB
+        const updateData: any = {};
+        if (infoMap.has('tên')) updateData.name = infoMap.get('tên');
+        if (infoMap.has('sđt')) updateData.phone = infoMap.get('sđt');
+        if (infoMap.has('địa chỉ')) updateData.address = infoMap.get('địa chỉ');
+
+        if (Object.keys(updateData).length === 0) {
+          reply = 'Không xác định được thông tin cần cập nhật. Vui lòng nhập theo cú pháp: Cập nhật tên: <tên>, SĐT: <số điện thoại>, Địa chỉ: <địa chỉ>';
+          await appendMessageToContext({ userId, sessionId, message: { role: 'user', content: prompt, timestamp: new Date() }, lastIntent: intent });
+          await appendMessageToContext({ userId, sessionId, message: { role: 'assistant', content: reply, timestamp: new Date() }, lastIntent: intent });
+          return res.status(400).json({ message: reply, intent });
+        }
+
+        await UserModel.findByIdAndUpdate(userId, { $set: updateData });
+        // Lấy lại profile mới nhất
+        const newProfile = await UserModel.findById(userId).lean();
+        const updatedFields = Object.keys(updateData).map(field => {
+          switch (field) {
+            case 'name': return 'họ tên';
+            case 'phone': return 'số điện thoại';
+            case 'address': return 'địa chỉ';
+            default: return field;
+          }
+        }).join(', ');
+        reply = `Đã cập nhật ${updatedFields} của bạn thành công.`;
+
+        await appendMessageToContext({ userId, sessionId, message: { role: 'user', content: prompt, timestamp: new Date() }, lastIntent: intent });
+        await appendMessageToContext({ userId, sessionId, message: { role: 'assistant', content: reply, timestamp: new Date() }, lastIntent: intent });
+        // Trả về profile mới nhất cho FE
+        return res.json({ reply, intent, sessionId, profile: newProfile });
+      } catch (err) {
+        console.error('Lỗi update_profile:', err);
+        reply = 'Xin lỗi, có lỗi xảy ra khi cập nhật thông tin. Vui lòng thử lại sau.';
+        await appendMessageToContext({ userId, sessionId, message: { role: 'user', content: prompt, timestamp: new Date() }, lastIntent: intent });
+        await appendMessageToContext({ userId, sessionId, message: { role: 'assistant', content: reply, timestamp: new Date() }, lastIntent: intent });
+        return res.status(500).json({ message: reply, intent });
       }
-      // Cập nhật profile
-      const update: any = {}
-      if (name) update.name = name
-      if (phone) update.phone = phone
-      if (address) update.address = address
-      await require('../../database/models/user.model').findByIdAndUpdate(userId, update)
-      // Fetch lại profile mới
-      const newProfile = await require('../../database/models/user.model').findById(userId).lean()
-      reply = `Đã cập nhật thông tin thành công. Thông tin mới của bạn:\n- Họ tên: ${newProfile.name || ''}\n- SĐT: ${newProfile.phone || ''}\n- Địa chỉ: ${newProfile.address || ''}`
-      await appendMessageToContext({ userId, sessionId, message: { role: 'user', content: prompt, timestamp: new Date() }, lastIntent: intent })
-      await appendMessageToContext({ userId, sessionId, message: { role: 'assistant', content: reply, timestamp: new Date() }, lastIntent: intent })
-      return res.json({ reply, intent, sessionId, profile: newProfile })
     }
     // Các intent khác
     else {
