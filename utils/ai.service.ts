@@ -41,6 +41,7 @@ Hướng dẫn phân tích:
 4. Chọn ý định phù hợp nhất
 
 Câu của khách hàng: "${userPrompt}"`
+
     const result = await sendPromptAI(intentPrompt)
     return result.split(/\s|\n/)[0].replace(/[^a-zA-Z_]/g, '').toLowerCase();
 }
