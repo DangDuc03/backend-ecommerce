@@ -41,11 +41,48 @@ export async function appendMessageToContext({ userId, sessionId, message, lastI
     let filter: any = {};
     if (userId) filter = { userId };
     else if (sessionId) filter = { sessionId };
-    else return null; // Không có userId/sessionId thì không làm gì cả
+    else return null;
 
     const context = await ChatContext.findOne(filter).exec();
     let messages = context?.messages || [];
+
+    // Thêm message mới
     messages.push(message);
-    if (messages.length > 20) messages = messages.slice(-20);
+
+    // Giữ lại 10 messages gần nhất thay vì 20 để tối ưu context
+    if (messages.length > 10) {
+        messages = messages.slice(-10);
+    }
+
+    // Cập nhật lastIntent nếu có
+    if (lastIntent) {
+        context.lastIntent = lastIntent;
+    }
+
+    // Cập nhật cart nếu có
+    if (cart) {
+        context.cart = cart;
+    }
+
+    // Cập nhật timestamp
+    context.updatedAt = new Date();
+
     return saveOrUpdateContext({ userId, sessionId, messages, lastIntent, cart });
+}
+
+// Lấy context với thông tin bổ sung
+export async function getEnhancedContext({ userId, sessionId }: { userId?: string; sessionId?: string }): Promise<any> {
+    const context = await getContext({ userId, sessionId });
+    if (!context) return null;
+
+    // Thêm thông tin bổ sung vào context
+    const enhancedContext = {
+        ...context.toObject(),
+        lastMessage: context.messages[context.messages.length - 1],
+        lastIntent: context.lastIntent,
+        cart: context.cart,
+        messageCount: context.messages.length
+    };
+
+    return enhancedContext;
 } 
