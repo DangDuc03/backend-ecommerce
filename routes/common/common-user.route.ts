@@ -483,58 +483,95 @@ commonUserRouter.post(
     }
     // Nếu intent là suggest_product (gợi ý sản phẩm)
     else if (intent === 'suggest_product') {
-      // 1. Parse giá từ prompt (nếu có)
-      let minPrice = 0, maxPrice = 0
-      const priceMatch = prompt.match(/(\d{1,3}(?:[.,]\d{3})*)(?:\s*[-đếnto]+\s*)(\d{1,3}(?:[.,]\d{3})*)/i)
-      if (priceMatch) {
-        minPrice = parseInt(priceMatch[1].replace(/\D/g, ''))
-        maxPrice = parseInt(priceMatch[2].replace(/\D/g, ''))
-      }
-      // Lấy danh sách tên danh mục
+      // Lưu message user vào context trước khi xử lý
+      await appendMessageToContext({
+        userId,
+        sessionId,
+        message: { role: 'user', content: prompt, timestamp: new Date() },
+        lastIntent: intent
+      })
+
+      // 1. Lấy danh sách danh mục từ DB
       const categories = await CategoryModel.find({}).lean();
-      const categoryNames = categories.map((c: any) => c.name).join(', ');
-      // Dùng AI trích xuất keyword/danh mục phù hợp
-      const extractPrompt = `Danh sách danh mục sản phẩm hiện có: ${categoryNames}.\nHãy đọc câu sau và trả về duy nhất 1 từ khoá hoặc tên danh mục phù hợp nhất với ý định tìm sản phẩm của khách (chỉ trả về tên danh mục hoặc keyword, không giải thích, không thêm ký tự thừa).\nCâu: \"${prompt}\"`;
-      const extractedCategory = (await sendPromptAI(extractPrompt, aiHistory)).trim();
-      let products: any[] = [];
-      // Nếu AI trả về đúng tên danh mục, lọc theo danh mục đó
-      const matchedCategory = categories.find((c: any) => extractedCategory && extractedCategory.toLowerCase() === c.name.toLowerCase());
-      if (matchedCategory) {
-        if (minPrice && maxPrice) {
-          products = await ProductModel.find({ category: matchedCategory._id, price: { $gte: minPrice, $lte: maxPrice } }).limit(5).lean();
-        } else {
-          products = await ProductModel.find({ category: matchedCategory._id }).limit(5).lean();
-        }
-      } else {
-        if (minPrice && maxPrice) {
-          products = await ProductModel.find({ price: { $gte: minPrice, $lte: maxPrice } }).limit(5).lean();
-        } else {
-          products = await ProductModel.find({}).limit(5).lean();
-        }
+      if (!categories.length) {
+        reply = 'Hiện tại cửa hàng chưa có danh mục sản phẩm nào.';
+        await appendMessageToContext({
+          userId,
+          sessionId,
+          message: { role: 'assistant', content: reply, suggestedProducts: [], timestamp: new Date() },
+          lastIntent: intent
+        });
+        return res.json({ reply, intent, sessionId, suggestedProducts: [] });
       }
+
+      // 2. Dùng AI trích xuất keyword/tên danh mục phù hợp nhất
+      const extractPrompt = `Bạn là hệ thống trích xuất keyword/tên danh mục từ yêu cầu của khách hàng.
+Danh sách danh mục hiện có: ${categories.map((c: any) => c.name).join(', ')}
+Hãy đọc câu sau và trả về duy nhất 1 keyword/tên danh mục phù hợp nhất với ý định tìm sản phẩm của khách (chỉ trả về 1 keyword/tên danh mục, không giải thích, không thêm ký tự thừa).
+Nếu không có danh mục nào phù hợp, trả về chuỗi rỗng.
+Câu: "${prompt}"`;
+      const extractedCategory = await sendPromptAI(extractPrompt);
+
+      // 3. Tìm danh mục phù hợp trong DB
+      const matchedCategory = extractedCategory ? await CategoryModel.findOne({ name: { $regex: extractedCategory, $options: 'i' } }).lean() : null;
+
+      // 4. Tìm sản phẩm theo danh mục và giá (nếu có)
+      let products = [];
+      if (matchedCategory) {
+        products = await ProductModel.find({ category: matchedCategory._id }).lean();
+      } else {
+        products = await ProductModel.find({}).lean();
+      }
+
+      // 5. Lọc theo giá nếu có
+      let minPrice = 0, maxPrice = 0;
+      const priceMatch = prompt.match(/(\d+)\s*(k|nghìn|tr|triệu|đồng)/i);
+      if (priceMatch) {
+        const price = parseInt(priceMatch[1]);
+        const unit = priceMatch[2].toLowerCase();
+        minPrice = unit.includes('tr') ? price * 1000000 : price * 1000;
+        maxPrice = minPrice * 1.2; // Cho phép sai số 20%
+        products = products.filter((p: any) => p.price >= minPrice && p.price <= maxPrice);
+      }
+
+      // 6. Trả về kết quả
       if (!products.length) {
         reply = matchedCategory
-          ? `Không tìm thấy sản phẩm nào thuộc danh mục ${(matchedCategory as any).name}${minPrice && maxPrice ? ` trong khoảng giá từ ${minPrice.toLocaleString()}đ đến ${maxPrice.toLocaleString()}đ` : ''}.`
-          : minPrice && maxPrice
+          ? `Không tìm thấy sản phẩm nào thuộc danh mục ${(matchedCategory as any).name}${priceMatch ? ` trong khoảng giá từ ${minPrice.toLocaleString()}đ đến ${maxPrice.toLocaleString()}đ` : ''}.`
+          : priceMatch
             ? `Không tìm thấy sản phẩm nào trong khoảng giá từ ${minPrice.toLocaleString()}đ đến ${maxPrice.toLocaleString()}đ.`
-            : 'Hiện tại cửa hàng chưa có sản phẩm nào.'
-        await appendMessageToContext({ userId, sessionId, message: { role: 'user', content: prompt, timestamp: new Date() }, lastIntent: intent })
-        await appendMessageToContext({ userId, sessionId, message: { role: 'assistant', content: reply, suggestedProducts: [], timestamp: new Date() }, lastIntent: intent })
-        return res.json({ reply, intent, sessionId, suggestedProducts: [] })
+            : 'Hiện tại cửa hàng chưa có sản phẩm nào.';
+        await appendMessageToContext({
+          userId,
+          sessionId,
+          message: { role: 'assistant', content: reply, suggestedProducts: [], timestamp: new Date() },
+          lastIntent: intent
+        });
+        return res.json({ reply, intent, sessionId, suggestedProducts: [] });
       }
-      // Map ra mảng sản phẩm có url FE
+
+      // 7. Map ra mảng sản phẩm có url FE
       const suggestedProducts = products.map((p: any) => ({
         name: p.name,
         price: p.price,
         productId: p._id,
         url: `/${generateNameId({ name: p.name, id: p._id })}`
-      }))
-      reply = matchedCategory
-        ? `Dưới đây là một số sản phẩm thuộc danh mục ${(matchedCategory as any).name}${minPrice && maxPrice ? ` trong khoảng giá từ ${minPrice.toLocaleString()}đ đến ${maxPrice.toLocaleString()}đ` : ' bạn có thể tham khảo ạ!'}:`
-        : 'Dưới đây là một số sản phẩm phù hợp:'
-      await appendMessageToContext({ userId, sessionId, message: { role: 'user', content: prompt, timestamp: new Date() }, lastIntent: intent })
-      await appendMessageToContext({ userId, sessionId, message: { role: 'assistant', content: reply, suggestedProducts, timestamp: new Date() }, lastIntent: intent })
-      return res.json({ reply, intent, sessionId, suggestedProducts })
+      }));
+
+      // 8. Tạo reply phù hợp dựa trên data thực tế
+      const productList = suggestedProducts.map(p => `- ${p.name} (${p.price.toLocaleString()}đ)`).join('\n');
+      const dataPrompt = `Dưới đây là danh sách sản phẩm phù hợp với yêu cầu của khách hàng:\n${productList}\nChỉ được phép trả lời dựa trên danh sách trên, không được bịa thêm. Câu hỏi của khách: "${prompt}"\nHãy trả lời bằng tiếng Việt.`;
+      reply = await sendPromptAI(dataPrompt, aiHistory);
+
+      // 9. Lưu lại hội thoại
+      await appendMessageToContext({
+        userId,
+        sessionId,
+        message: { role: 'assistant', content: reply, suggestedProducts, timestamp: new Date() },
+        lastIntent: intent
+      });
+
+      return res.json({ reply, intent, sessionId, suggestedProducts });
     }
     // Nếu intent là update_profile (cập nhật tên, sđt, địa chỉ qua chatbot)
     else if (intent === 'update_profile') {
