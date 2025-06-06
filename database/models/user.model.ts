@@ -11,10 +11,15 @@ const UserSchema = new Schema(
     phone: { type: String, maxlength: 20 },
     roles: { type: [String], required: true, default: [ROLE.USER] },
     avatar: { type: String, maxlength: 1000 },
+    isOnline: { type: Boolean, default: false },
+    lastActive: { type: Date, default: Date.now }
   },
   {
     timestamps: true,
   }
 )
+
+// Index cho việc tìm kiếm user online
+UserSchema.index({ isOnline: 1, lastActive: -1 })
 
 export const UserModel = mongoose.model('users', UserSchema)
