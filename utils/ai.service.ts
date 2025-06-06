@@ -43,6 +43,7 @@ Hướng dẫn phân tích:
    - Khi khách hàng hỏi về link sản phẩm hoặc muốn xem chi tiết sản phẩm, hãy phân loại vào intent suggest_product
    - Khi khách hàng hỏi về sản phẩm cụ thể, hãy phân loại vào intent search_product
    - Khi khách hàng muốn thêm sản phẩm vào giỏ hàng, hãy phân loại vào intent add_to_cart
+   - Khi khách hàng hỏi "có sản phẩm nào không", "cho xem sản phẩm", "link sản phẩm", hãy phân loại vào intent suggest_product
 
 Câu của khách hàng: "${userPrompt}"`
     const result = await sendPromptAI(intentPrompt)
