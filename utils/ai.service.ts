@@ -19,33 +19,8 @@ export async function sendPromptAI(prompt: string, history: { role: string, cont
 }
 
 export async function detectIntentAI(userPrompt: string): Promise<string> {
-    const intentPrompt = `Bạn là trợ lý thông minh của cửa hàng trực tuyến. Hãy phân tích câu nói của khách hàng và xác định ý định chính của họ.
 
-Các ý định chính:
-- search_product: Khi khách hàng muốn tìm kiếm, xem, hỏi về sản phẩm
-- add_to_cart: Khi khách hàng muốn thêm sản phẩm vào giỏ hàng
-- view_cart: Khi khách hàng muốn xem giỏ hàng
-- order: Khi khách hàng muốn đặt hàng hoặc thanh toán
-- info: Khi khách hàng cần thông tin hoặc tư vấn
-- check_order_status: Khi khách hàng muốn kiểm tra đơn hàng
-- cancel_order: Khi khách hàng muốn hủy đơn hàng
-- change_cart_quantity: Khi khách hàng muốn thay đổi số lượng trong giỏ hàng
-- suggest_product: Khi khách hàng cần gợi ý sản phẩm, xin link sản phẩm, hoặc muốn biết thông tin chi tiết về sản phẩm
-- update_profile: Khi khách hàng muốn cập nhật thông tin cá nhân
-- other: Các ý định khác
-
-Hướng dẫn phân tích:
-1. Đọc kỹ câu nói của khách hàng
-2. Hiểu ý định thực sự, không chỉ dựa vào từ khóa
-3. Xem xét ngữ cảnh và cách diễn đạt
-4. Chọn ý định phù hợp nhất
-5. Lưu ý: 
-   - Khi khách hàng hỏi về link sản phẩm hoặc muốn xem chi tiết sản phẩm, hãy phân loại vào intent suggest_product
-   - Khi khách hàng hỏi về sản phẩm cụ thể, hãy phân loại vào intent search_product
-   - Khi khách hàng muốn thêm sản phẩm vào giỏ hàng, hãy phân loại vào intent add_to_cart
-   - Khi khách hàng hỏi "có sản phẩm nào không", "cho xem sản phẩm", "link sản phẩm", hãy phân loại vào intent suggest_product
-
-Câu của khách hàng: "${userPrompt}"`
+    const intentPrompt = `Bạn là hệ thống phân tích ý định người dùng.\nCác intent hợp lệ:\n- search_product (tìm kiếm sản phẩm)\n- add_to_cart (thêm vào giỏ hàng)\n- view_cart (xem giỏ hàng)\n- order (đặt hàng, thanh toán, mua hàng, tôi muốn mua, tôi muốn đặt, tôi muốn thanh toán, mua tất cả, mua sản phẩm, đặt tất cả, đặt hàng, thanh toán giỏ hàng, checkout)\n- info (hỏi thông tin)\n- check_order_status (kiểm tra trạng thái đơn hàng)\n- cancel_order (hủy đơn hàng)\n- change_cart_quantity (thay đổi số lượng sản phẩm trong giỏ hàng)\n- suggest_product (gợi ý sản phẩm, tư vấn sản phẩm, sản phẩm phù hợp, sản phẩm trong tầm giá, sản phẩm giá rẻ, sản phẩm nổi bật, sản phẩm bán chạy, tôi nên mua gì, gợi ý cho tôi, tư vấn cho tôi, sản phẩm nào tốt, sản phẩm nào phù hợp, sản phẩm nào trong khoảng giá, sản phẩm nào từ ... đến ...)\n- update_profile (cập nhật thông tin, cập nhật tên, cập nhật số điện thoại, cập nhật địa chỉ, đổi tên, đổi sđt, đổi địa chỉ, tôi muốn đổi tên, tôi muốn đổi sđt, tôi muốn đổi địa chỉ, tôi muốn cập nhật thông tin, tôi muốn cập nhật profile, tôi muốn cập nhật tài khoản)\n- other (khác)\n\nHãy đọc câu sau và trả về duy nhất 1 intent phù hợp nhất (chỉ trả về tên intent, không giải thích).\n${LANGUAGE_INSTRUCTION}\n\nCâu: "${userPrompt}"`
     const result = await sendPromptAI(intentPrompt)
     return result.split(/\s|\n/)[0].replace(/[^a-zA-Z_]/g, '').toLowerCase();
 }
