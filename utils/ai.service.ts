@@ -30,7 +30,7 @@ Các ý định chính:
 - check_order_status: Khi khách hàng muốn kiểm tra đơn hàng
 - cancel_order: Khi khách hàng muốn hủy đơn hàng
 - change_cart_quantity: Khi khách hàng muốn thay đổi số lượng trong giỏ hàng
-- suggest_product: Khi khách hàng cần gợi ý sản phẩm
+- suggest_product: Khi khách hàng cần gợi ý sản phẩm, xin link sản phẩm, hoặc muốn biết thông tin chi tiết về sản phẩm
 - update_profile: Khi khách hàng muốn cập nhật thông tin cá nhân
 - other: Các ý định khác
 
@@ -39,9 +39,12 @@ Hướng dẫn phân tích:
 2. Hiểu ý định thực sự, không chỉ dựa vào từ khóa
 3. Xem xét ngữ cảnh và cách diễn đạt
 4. Chọn ý định phù hợp nhất
+5. Lưu ý: 
+   - Khi khách hàng hỏi về link sản phẩm hoặc muốn xem chi tiết sản phẩm, hãy phân loại vào intent suggest_product
+   - Khi khách hàng hỏi về sản phẩm cụ thể, hãy phân loại vào intent search_product
+   - Khi khách hàng muốn thêm sản phẩm vào giỏ hàng, hãy phân loại vào intent add_to_cart
 
 Câu của khách hàng: "${userPrompt}"`
-
     const result = await sendPromptAI(intentPrompt)
     return result.split(/\s|\n/)[0].replace(/[^a-zA-Z_]/g, '').toLowerCase();
 }

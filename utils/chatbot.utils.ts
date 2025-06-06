@@ -58,4 +58,31 @@ export function buildProductSearchPrompt(productInfo: { name: string; quantity: 
     prompt += `- Số lượng: ${productInfo.quantity}\n\n`;
     prompt += `Hãy tìm kiếm sản phẩm phù hợp nhất với thông tin trên. Nếu không tìm thấy sản phẩm chính xác, hãy gợi ý các sản phẩm tương tự.`;
     return prompt;
+}
+
+export function buildProductSuggestionPrompt(productInfo: { name?: string; category?: string }, availableProducts: any[]): string {
+    let prompt = `Bạn là trợ lý tư vấn sản phẩm. Hãy tư vấn cho khách hàng dựa trên danh sách sản phẩm có sẵn sau:\n\n`;
+
+    // Thêm thông tin sản phẩm vào prompt
+    availableProducts.forEach((product, index) => {
+        prompt += `${index + 1}. ${product.name} - ${product.price}đ\n`;
+        if (product.description) {
+            prompt += `   Mô tả: ${product.description}\n`;
+        }
+        if (product.url) {
+            prompt += `   Link: ${product.url}\n`;
+        }
+        prompt += '\n';
+    });
+
+    prompt += `\nYêu cầu của khách hàng: `;
+    if (productInfo.name) {
+        prompt += `Tìm sản phẩm "${productInfo.name}"`;
+    }
+    if (productInfo.category) {
+        prompt += ` trong danh mục "${productInfo.category}"`;
+    }
+    prompt += `\n\nHãy tư vấn cho khách hàng dựa trên danh sách sản phẩm có sẵn ở trên. Chỉ được tư vấn các sản phẩm có trong danh sách. Nếu không tìm thấy sản phẩm phù hợp, hãy gợi ý các sản phẩm tương tự từ danh sách.`;
+
+    return prompt;
 } 
