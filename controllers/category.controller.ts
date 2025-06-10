@@ -2,6 +2,9 @@ import { Request, Response } from 'express'
 import { responseSuccess, ErrorHandler } from '../utils/response'
 import { STATUS } from '../constants/status'
 import { CategoryModel } from '../database/models/category.model'
+import { Category } from '../@types/category.type'
+
+
 
 const addCategory = async (req: Request, res: Response) => {
   const name: string = req.body.name
@@ -21,9 +24,9 @@ const addCategory = async (req: Request, res: Response) => {
 const getCategories = async (req: Request, res: Response) => {
   const { exclude } = req.query
   let condition = exclude ? { _id: { $ne: exclude } } : {}
-  const categories = await CategoryModel.find(condition)
+  const categories: Category[] = await CategoryModel.find(condition)
     .select({ __v: 0 })
-    .lean()
+    .lean<Category[]>()
   const response = {
     message: 'Lấy categories thành công',
     data: categories,
@@ -32,9 +35,11 @@ const getCategories = async (req: Request, res: Response) => {
 }
 
 const getCategory = async (req: Request, res: Response) => {
-  const categoryDB = await CategoryModel.findById(req.params.category_id)
+  const categoryDB: Category | null = await CategoryModel.findById(
+    req.params.category_id
+  )
     .select({ __v: 0 })
-    .lean()
+    .lean<Category>()
   if (categoryDB) {
     const response = {
       message: 'Lấy category thành công',
@@ -48,13 +53,13 @@ const getCategory = async (req: Request, res: Response) => {
 
 const updateCategory = async (req: Request, res: Response) => {
   const { name } = req.body
-  const categoryDB = await CategoryModel.findByIdAndUpdate(
+  const categoryDB: Category | null = await CategoryModel.findByIdAndUpdate(
     req.params.category_id,
     { name },
     { new: true }
   )
     .select({ __v: 0 })
-    .lean()
+    .lean<Category>()
   if (categoryDB) {
     const response = {
       message: 'Cập nhật category thành công',
@@ -68,7 +73,8 @@ const updateCategory = async (req: Request, res: Response) => {
 
 const deleteCategory = async (req: Request, res: Response) => {
   const category_id = req.params.category_id
-  const categoryDB = await CategoryModel.findByIdAndDelete(category_id).lean()
+  const categoryDB: Category | null =
+    await CategoryModel.findByIdAndDelete(category_id).lean<Category>()
   if (categoryDB) {
     return responseSuccess(res, { message: 'Xóa thành công' })
   } else {

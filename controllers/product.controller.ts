@@ -10,8 +10,11 @@ import { FOLDERS, FOLDER_UPLOAD, ROUTE_IMAGE } from '../constants/config'
 import fs from 'fs'
 import { omitBy } from 'lodash'
 import { ORDER, SORT_BY } from '../constants/product'
+import { FilterQuery, Types } from 'mongoose'
+import { Product } from '../@types/product.type'
 
-export const handleImageProduct = (product) => {
+
+export const handleImageProduct = (product: Product): Product => {
   if (product.image !== undefined && product.image !== '') {
     product.image = HOST + `/${ROUTE_IMAGE}/` + product.image
   }
@@ -23,7 +26,7 @@ export const handleImageProduct = (product) => {
   return product
 }
 
-const removeImageProduct = (image) => {
+const removeImageProduct = (image: string) => {
   if (image !== undefined && image !== '') {
     fs.unlink(`${FOLDER_UPLOAD}/${FOLDERS.PRODUCT}/${image}`, (err) => {
       if (err) console.error(err)
@@ -98,25 +101,25 @@ const getProducts = async (req: Request, res: Response) => {
 
   page = Number(page)
   limit = Number(limit)
-  let condition: any = {}
+  let condition: FilterQuery<Product> = {}
   if (category) {
-    condition.category = category
+    condition.category = category as any
   }
   if (exclude) {
-    condition._id = { $ne: exclude }
+    condition._id = { $ne: exclude as string }
   }
   if (rating_filter) {
-    condition.rating = { $gte: rating_filter }
+    condition.rating = { $gte: Number(rating_filter) }
   }
+  const price_query: { $gte?: number; $lte?: number } = {}
   if (price_max) {
-    condition.price = {
-      $lte: price_max,
-    }
+    price_query.$lte = Number(price_max)
   }
   if (price_min) {
-    condition.price = condition.price
-      ? { ...condition.price, $gte: price_min }
-      : { $gte: price_min }
+    price_query.$gte = Number(price_min)
+  }
+  if (Object.keys(price_query).length > 0) {
+    condition.price = price_query
   }
   if (!ORDER.includes(order as string)) {
     order = ORDER[0]
@@ -126,23 +129,22 @@ const getProducts = async (req: Request, res: Response) => {
   }
   if (name) {
     condition.name = {
-      $regex: name,
+      $regex: name as string,
       $options: 'i',
     }
   }
-  let [products, totalProducts]: [products: any, totalProducts: any] =
-    await Promise.all([
-      ProductModel.find(condition)
-        .populate({
-          path: 'category',
-        })
-        .sort({ [sort_by]: order === 'desc' ? -1 : 1 })
-        .skip(page * limit - limit)
-        .limit(limit)
-        .select({ __v: 0, description: 0 })
-        .lean(),
-      ProductModel.find(condition).countDocuments().lean(),
-    ])
+  let [products, totalProducts]: [Product[], number] = await Promise.all([
+    ProductModel.find(condition)
+      .populate({
+        path: 'category',
+      })
+      .sort({ [sort_by as string]: order === 'desc' ? -1 : 1 })
+      .skip(page * limit - limit)
+      .limit(limit)
+      .select({ __v: 0, description: 0 })
+      .lean<Product[]>(),
+    ProductModel.find(condition).countDocuments().lean(),
+  ])
   products = products.map((product) => handleImageProduct(product))
   const page_size = Math.ceil(totalProducts / limit) || 1
   const response = {
@@ -161,15 +163,15 @@ const getProducts = async (req: Request, res: Response) => {
 
 const getAllProducts = async (req: Request, res: Response) => {
   let { category } = req.query
-  let condition = {}
+  let condition: FilterQuery<Product> = {}
   if (category) {
-    condition = { category: category }
+    condition = { category: category as any }
   }
-  let products: any = await ProductModel.find(condition)
+  let products: Product[] = await ProductModel.find(condition)
     .populate({ path: 'category' })
     .sort({ createdAt: -1 })
     .select({ __v: 0, description: 0 })
-    .lean()
+    .lean<Product[]>()
   products = products.map((product) => handleImageProduct(product))
   const response = {
     message: 'Lấy tất cả sản phẩm thành công',
@@ -180,14 +182,14 @@ const getAllProducts = async (req: Request, res: Response) => {
 
 const getProduct = async (req: Request, res: Response) => {
   let condition = { _id: req.params.product_id }
-  const productDB: any = await ProductModel.findOneAndUpdate(
+  const productDB: Product | null = await ProductModel.findOneAndUpdate(
     condition,
     { $inc: { view: 1 } },
     { new: true }
   )
     .populate('category')
     .select({ __v: 0 })
-    .lean()
+    .lean<Product>()
   if (productDB) {
     const response = {
       message: 'Lấy sản phẩm thành công',
@@ -238,7 +240,7 @@ const updateProduct = async (req: Request, res: Response) => {
     }
   )
     .select({ __v: 0 })
-    .lean()
+    .lean<Product>()
   if (productDB) {
     const response = {
       message: 'Cập nhật sản phẩm thành công',
@@ -252,7 +254,7 @@ const updateProduct = async (req: Request, res: Response) => {
 
 const deleteProduct = async (req: Request, res: Response) => {
   const product_id = req.params.product_id
-  const productDB: any = await ProductModel.findByIdAndDelete(product_id).lean()
+  const productDB: Product | null = await ProductModel.findByIdAndDelete(product_id).lean<Product>()
   if (productDB) {
     removeImageProduct(productDB.image)
     removeManyImageProduct(productDB.images)
@@ -266,9 +268,9 @@ const deleteManyProducts = async (req: Request, res: Response) => {
   const list_id = (req.body.list_id as string[]).map((id: string) =>
     mongoose.Types.ObjectId(id)
   )
-  const productDB: any = await ProductModel.find({
+  const productDB: Product[] = await ProductModel.find({
     _id: { $in: list_id },
-  }).lean()
+  }).lean<Product[]>()
   const deletedData = await ProductModel.deleteMany({
     _id: { $in: list_id },
   }).lean()
@@ -289,15 +291,15 @@ const deleteManyProducts = async (req: Request, res: Response) => {
 const searchProduct = async (req: Request, res: Response) => {
   let { searchText }: { [key: string]: string | any } = req.query
   searchText = decodeURI(searchText)
-  let condition = { $text: { $search: `\"${searchText}\"` } }
+  let condition: any = { $text: { $search: `\"${searchText}\"` } }
   if (!isAdmin(req)) {
     condition = Object.assign(condition, { visible: true })
   }
-  let products: any = await ProductModel.find(condition)
+  let products: Product[] = await ProductModel.find(condition)
     .populate('category')
     .sort({ createdAt: -1 })
     .select({ __v: 0, description: 0 })
-    .lean()
+    .lean<Product[]>()
   products = products.map((product) => handleImageProduct(product))
   const response = {
     message: 'Tìm các sản phẩm thành công',

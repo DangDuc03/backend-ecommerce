@@ -9,6 +9,15 @@ import { AccessTokenModel } from '../database/models/access-token.model'
 import { RefreshTokenModel } from '../database/models/refresh-token.model'
 import { omit } from 'lodash'
 import { STATUS } from '../constants/status'
+import { IUser } from '../database/models/user.model'
+
+declare global {
+  namespace Express {
+    interface Request {
+      user?: IUser
+    }
+  }
+}
 
 const getExpire = (req: Request) => {
   let expireAccessTokenConfig = Number(req.headers['expire-access-token'])
@@ -165,9 +174,8 @@ const refreshTokenController = async (req: Request, res: Response) => {
 
 const logoutController = async (req: Request, res: Response) => {
   const access_token = req.headers.authorization?.replace('Bearer ', '')
-  await AccessTokenModel.findOneAndDelete({
-    token: access_token,
-  }).exec()
+  await AccessTokenModel.findOneAndDelete({ token: access_token }).exec()
+  await RefreshTokenModel.findOneAndDelete({ user_id: req.user._id }).exec()
   return responseSuccess(res, { message: 'Đăng xuất thành công' })
 }
 

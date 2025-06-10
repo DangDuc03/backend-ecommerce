@@ -14,3 +14,14 @@ export function removeAccents(str) {
     .replace(/đ/g, 'd')
     .replace(/Đ/g, 'D')
 }
+
+export function generateNameId({ name, id }: { name: string; id: string }) {
+  const removeSpecialCharacter = (str: string) =>
+    str.replace(/!|@|%|\^|\*|\(|\)|\+|\=|\<|\>|\?|\/|,|\.|\:|\;|\'|\"|\&|\#|\[|\]|~|\$|_|`|-|\{|\}|\||\\/g, '')
+
+  const nameId = removeSpecialCharacter(name)
+    .toLowerCase()
+    .split(' ')
+    .join('-')
+  return `${nameId}-i-${id}`
+} 

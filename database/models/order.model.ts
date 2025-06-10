@@ -1,5 +1,5 @@
 import mongoose, { Schema, Document } from 'mongoose';
-import { STATUS_PURCHASE } from '../constants/purchase';
+import { STATUS_PURCHASE } from '../../constants/purchase';
 
 export interface IOrder extends Document {
     userId: string;

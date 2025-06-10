@@ -1,7 +1,20 @@
-import mongoose, { Schema } from 'mongoose'
+import mongoose, { Schema, Document } from 'mongoose'
 import { ROLE } from '../../constants/role.enum'
 
-const UserSchema = new Schema(
+export interface IUser extends Document {
+  email: string
+  name?: string
+  password?: string
+  date_of_birth?: Date
+  address?: string
+  phone?: string
+  roles: string[]
+  avatar?: string
+  isOnline?: boolean
+  lastActive?: Date
+}
+
+const UserSchema = new Schema<IUser>(
   {
     email: { type: String, required: true, minlength: 5, maxlength: 160 },
     name: { type: String, maxlength: 160 },
@@ -22,4 +35,4 @@ const UserSchema = new Schema(
 // Index cho việc tìm kiếm user online
 UserSchema.index({ isOnline: 1, lastActive: -1 })
 
-export const UserModel = mongoose.model('users', UserSchema)
+export const UserModel = mongoose.model<IUser>('users', UserSchema)
