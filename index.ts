@@ -21,6 +21,16 @@ app.use(express.json())
 app.use(express.urlencoded({ extended: true }))
 
 const dirNameWithEnv = isProduction ? path.dirname(__dirname) : __dirname
+console.log('Directory path:', dirNameWithEnv)
+console.log('Upload folder path:', path.join(dirNameWithEnv, `/${FOLDER_UPLOAD}`))
+
+// Check if files exist
+const fs = require('fs')
+const uploadPath = path.join(dirNameWithEnv, `/${FOLDER_UPLOAD}`)
+console.log('Upload directory exists:', fs.existsSync(uploadPath))
+if (fs.existsSync(uploadPath)) {
+  console.log('Files in upload directory:', fs.readdirSync(uploadPath))
+}
 
 const handlerImage: any = Object.values(FOLDERS).reduce(
   (result: any, current: any) => {
