@@ -1,16 +1,23 @@
 import { hashValue } from '../utils/crypt'
 import { Request, Response } from 'express'
 import { responseSuccess, ErrorHandler } from '../utils/response'
-import { UserModel } from '../database/models/user.model'
+import { UserModel, IUser } from '../database/models/user.model'
 import { STATUS } from '../constants/status'
 import { omitBy, omit } from 'lodash'
 import { uploadFile } from '../utils/upload'
 import { FOLDERS, ROUTE_IMAGE } from '../constants/config'
 import { CLIENT_RENEG_LIMIT } from 'node:tls'
 
+declare global {
+  namespace Express {
+    interface Request {
+      user?: IUser
+    }
+  }
+}
 
 const addUser = async (req: Request, res: Response) => {
-  const form: User = req.body
+  const form: IUser = req.body
   const {
     email,
     password,
@@ -24,7 +31,7 @@ const addUser = async (req: Request, res: Response) => {
   const userInDB = await UserModel.findOne({ email: email }).exec()
   if (!userInDB) {
     const hashedPassword = hashValue(password)
-    const user = {
+    const user: Partial<IUser> = {
       email,
       password: hashedPassword,
       roles,
@@ -58,7 +65,7 @@ const addUser = async (req: Request, res: Response) => {
 const getUsers = async (req: Request, res: Response) => {
   const usersDB = await UserModel.find({})
     .select({ password: 0, __v: 0 })
-    .lean()
+    .lean<IUser[]>()
   const response = {
     message: 'Lấy người dùng thành công',
     data: usersDB,
@@ -67,24 +74,17 @@ const getUsers = async (req: Request, res: Response) => {
 }
 
 const getDetailMySelf = async (req: Request, res: Response) => {
-  const userDB = await UserModel.findById((req as any).jwtDecoded.id)
-    .select({ password: 0, __v: 0 })
-    .lean()
-  if (userDB) {
     const response = {
       message: 'Lấy người dùng thành công',
-      data: userDB,
+    data: req.user,
     }
     return responseSuccess(res, response)
-  } else {
-    throw new ErrorHandler(STATUS.UNAUTHORIZED, 'Không tìm thấy người dùng')
-  }
 }
 
 const getUser = async (req: Request, res: Response) => {
   const userDB = await UserModel.findById(req.params.user_id)
     .select({ password: 0, __v: 0 })
-    .lean()
+    .lean<IUser>()
   if (userDB) {
     const response = {
       message: 'Lấy người dùng thành công',
@@ -97,9 +97,9 @@ const getUser = async (req: Request, res: Response) => {
 }
 
 const updateUser = async (req: Request, res: Response) => {
-  const form: User = req.body
+  const form: IUser = req.body
   const { password, address, date_of_birth, name, phone, roles, avatar } = form
-  const user = omitBy(
+  const user: Partial<IUser> = omitBy(
     {
       password,
       address,
@@ -115,7 +115,7 @@ const updateUser = async (req: Request, res: Response) => {
     new: true,
   })
     .select({ password: 0, __v: 0 })
-    .lean()
+    .lean<IUser>()
   if (userDB) {
     const response = {
       message: 'Cập nhật người dùng thành công',
@@ -136,10 +136,13 @@ const uploadAvatar = async (req: Request, res: Response) => {
   return responseSuccess(res, response)
 }
 
+interface IUpdateMeBody extends IUser {
+  new_password?: string
+}
+
 const updateMe = async (req: Request, res: Response) => {
-  const form: User = req.body
+  const form: IUpdateMeBody = req.body
   const {
-    email,
     password,
     new_password,
     address,
@@ -148,9 +151,8 @@ const updateMe = async (req: Request, res: Response) => {
     phone,
     avatar,
   } = form
-  const user = omitBy(
+  const user: Partial<IUser> = omitBy(
     {
-      email,
       password,
       address,
       date_of_birth,
@@ -160,24 +162,26 @@ const updateMe = async (req: Request, res: Response) => {
     },
     (value) => value === undefined || value === ''
   )
-  const userDB: any = await UserModel.findById((req as any).jwtDecoded.id).lean()
-  if (user.password) {
-    const hash_password = hashValue(password)
-    if (hash_password === userDB.password) {
-      Object.assign(user, { password: hashValue(new_password) })
+
+  const userDB = req.user
+
+  if (user.password && new_password) {
+    const isPasswordMatch = hashValue(password) === userDB.password
+    if (isPasswordMatch) {
+      user.password = hashValue(new_password)
     } else {
       throw new ErrorHandler(STATUS.UNPROCESSABLE_ENTITY, {
         password: 'Password không đúng',
       })
     }
   }
-  const updatedUserDB = await UserModel.findByIdAndUpdate(
-    (req as any).jwtDecoded.id,
-    user,
-    { new: true }
-  )
+
+  const updatedUserDB = await UserModel.findByIdAndUpdate(userDB._id, user, {
+    new: true,
+  })
     .select({ password: 0, __v: 0 })
-    .lean()
+    .lean<IUser>()
+
   const response = {
     message: 'Cập nhật thông tin thành công',
     data: updatedUserDB,
@@ -187,7 +191,7 @@ const updateMe = async (req: Request, res: Response) => {
 
 const deleteUser = async (req: Request, res: Response) => {
   const user_id = req.params.user_id
-  const userDB = await UserModel.findByIdAndDelete(user_id).lean()
+  const userDB = await UserModel.findByIdAndDelete(user_id).lean<IUser>()
   if (userDB) {
     return responseSuccess(res, { message: 'Xóa thành công' })
   } else {

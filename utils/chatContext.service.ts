@@ -1,4 +1,4 @@
-import ChatContext, { IChatContext, IMessage } from '../models/chatContext.model';
+import ChatContext, { IChatContext, IMessage } from '../database/models/chatContext.model';
 
 // Lấy context theo userId hoặc sessionId
 export async function getContext({ userId, sessionId }: { userId?: string; sessionId?: string; }): Promise<IChatContext | null> {
@@ -31,43 +31,41 @@ export async function saveOrUpdateContext({ userId, sessionId, messages, lastInt
 }
 
 // Thêm message mới vào context
-export async function appendMessageToContext({ userId, sessionId, message, lastIntent, cart }: {
+export async function appendMessageToContext({
+    userId,
+    sessionId,
+    message,
+    lastIntent,
+    cart,
+}: {
     userId?: string;
     sessionId?: string;
     message: IMessage;
     lastIntent?: string;
     cart?: any;
 }): Promise<IChatContext | null> {
-    let filter: any = {};
-    if (userId) filter = { userId };
-    else if (sessionId) filter = { sessionId };
-    else return null;
+    if (!userId && !sessionId) {
+        return null;
+    }
 
-    const context = await ChatContext.findOne(filter).exec();
-    let messages = context?.messages || [];
+    const filter = userId ? { userId } : { sessionId };
+    const existingContext = await ChatContext.findOne(filter).exec();
 
-    // Thêm message mới
+    // Lấy danh sách message cũ hoặc tạo mới nếu chưa có
+    const messages = existingContext?.messages || [];
     messages.push(message);
 
-    // Giữ lại 10 messages gần nhất thay vì 20 để tối ưu context
-    if (messages.length > 10) {
-        messages = messages.slice(-10);
-    }
+    // Giữ lại 10 messages gần nhất
+    const updatedMessages = messages.length > 10 ? messages.slice(-10) : messages;
 
-    // Cập nhật lastIntent nếu có
-    if (lastIntent) {
-        context.lastIntent = lastIntent;
-    }
-
-    // Cập nhật cart nếu có
-    if (cart) {
-        context.cart = cart;
-    }
-
-    // Cập nhật timestamp
-    context.updatedAt = new Date();
-
-    return saveOrUpdateContext({ userId, sessionId, messages, lastIntent, cart });
+    // Luôn gọi saveOrUpdateContext để xử lý upsert (tạo mới hoặc cập nhật)
+    return saveOrUpdateContext({
+        userId,
+        sessionId,
+        messages: updatedMessages,
+        lastIntent,
+        cart: cart || existingContext?.cart, // Giữ lại cart cũ nếu có
+    });
 }
 
 // Lấy context với thông tin bổ sung

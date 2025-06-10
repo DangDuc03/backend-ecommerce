@@ -1,4 +1,21 @@
-import mongoose, { Schema } from 'mongoose'
+import mongoose, { Schema, model, Document } from 'mongoose'
+import { ICategory } from './category.model'
+
+export interface IProduct extends Document {
+  name: string
+  image: string
+  images: string[]
+  description: string
+  category: ICategory['_id']
+  price: number
+  price_before_discount: number
+  quantity: number
+  sold: number
+  view: number
+  rating: number
+  createAt: Date
+  updateAt: Date
+}
 
 const ProductSchema = new Schema(
   {
@@ -13,9 +30,19 @@ const ProductSchema = new Schema(
     quantity: { type: Number, default: 0 },
     sold: { type: Number, default: 0 },
     view: { type: Number, default: 0 },
+    createAt: {
+      type: Date,
+      default: Date.now
+    },
+    updateAt: {
+      type: Date,
+      default: Date.now
+    }
   },
   {
     timestamps: true,
+    collection: 'products'
   }
 )
-export const ProductModel = mongoose.model('products', ProductSchema)
+
+export const ProductModel = model<IProduct>('products', ProductSchema)

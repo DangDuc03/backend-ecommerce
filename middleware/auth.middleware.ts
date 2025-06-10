@@ -7,7 +7,13 @@ import { STATUS } from '../constants/status'
 import { AccessTokenModel } from '../database/models/access-token.model'
 import { RefreshTokenModel } from '../database/models/refresh-token.model'
 import { body } from 'express-validator'
-import { UserModel } from '../database/models/user.model'
+import { UserModel, IUser } from '../database/models/user.model'
+
+interface PayloadToken {
+  id: string
+  roles: string[]
+  [key: string]: any
+}
 
 const verifyAccessToken = async (
   req: Request,
@@ -15,32 +21,34 @@ const verifyAccessToken = async (
   next: NextFunction
 ) => {
   const access_token = req.headers.authorization?.replace('Bearer ', '')
-  if (access_token) {
+  if (!access_token) {
+    return responseError(
+      res,
+      new ErrorHandler(STATUS.UNAUTHORIZED, 'Token không được gửi')
+    )
+  }
     try {
       const decoded = (await verifyToken(
         access_token,
         config.SECRET_KEY
       )) as PayloadToken
       req.jwtDecoded = decoded
-      const accessTokenDB = await AccessTokenModel.findOne({
-        token: access_token,
-      }).exec()
 
-      if (accessTokenDB) {
-        return next()
-      }
+    const user = await UserModel.findById(decoded.id).lean<IUser>()
+    if (!user) {
       return responseError(
         res,
-        new ErrorHandler(STATUS.UNAUTHORIZED, 'Không tồn tại token')
+        new ErrorHandler(
+          STATUS.UNAUTHORIZED,
+          'Không tìm thấy người dùng từ token'
+        )
       )
+    }
+    req.user = user
+    next()
     } catch (error) {
       return responseError(res, error)
     }
-  }
-  return responseError(
-    res,
-    new ErrorHandler(STATUS.UNAUTHORIZED, 'Token không được gửi')
-  )
 }
 
 const verifyRefreshToken = async (
@@ -78,8 +86,7 @@ const verifyRefreshToken = async (
 }
 
 const verifyAdmin = async (req: Request, res: Response, next: NextFunction) => {
-  const userDB: User = await UserModel.findById(req.jwtDecoded.id).lean()
-  if (userDB.roles.includes(ROLE.ADMIN)) {
+  if (req.user && req.user.roles.includes(ROLE.ADMIN)) {
     return next()
   }
   return responseError(
