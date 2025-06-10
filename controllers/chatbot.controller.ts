@@ -76,9 +76,27 @@ const handleChatPrompt = async (req: Request, res: Response) => {
     'update_profile',
   ]
   if (requiredLoginIntents.includes(intent) && !userId) {
-    return res
-      .status(401)
-      .json({ message: 'Bạn cần đăng nhập để sử dụng tính năng này.' })
+    await appendMessageToContext({
+      userId,
+      sessionId,
+      message: { role: 'user', content: prompt, timestamp: new Date() },
+      lastIntent: intent,
+    })
+
+    reply = 'Bạn cần đăng nhập để sử dụng tính năng này.'
+
+    await appendMessageToContext({
+      userId,
+      sessionId,
+      message: { role: 'assistant', content: reply, timestamp: new Date() },
+      lastIntent: intent,
+    })
+
+    if (newSessionIdCreated) {
+      res.cookie('sessionId', sessionId, { httpOnly: true })
+    }
+
+    return res.status(401).json({ reply, intent, sessionId, user: req.user })
   }
 
   // Xử lý các intent
@@ -251,7 +269,7 @@ const handleChatPrompt = async (req: Request, res: Response) => {
           return res.status(400).json({ message: reply, intent })
         }
 
-        let purchasesToOrder: IPurchasePopulated[] = []
+        let purchasesToBuy: IPurchasePopulated[] = []
 
         // Dùng AI để xác định sản phẩm cần đặt
         const extractPrompt = `Hãy trích xuất tên sản phẩm muốn thanh toán từ câu sau. Nếu ý định là thanh toán toàn bộ giỏ hàng, trả về "tất cả". Nếu không có tên sản phẩm, trả về rỗng. Không giải thích, chỉ trả về đúng định dạng.\nCâu: ${prompt}`
@@ -263,7 +281,7 @@ const handleChatPrompt = async (req: Request, res: Response) => {
           reply =
             'Bạn muốn thanh toán toàn bộ giỏ hàng hay chỉ một số sản phẩm? Vui lòng nhập tên sản phẩm hoặc chọn "tất cả".'
         } else if (extractResult.toLowerCase() === 'tất cả') {
-          purchasesToOrder = await PurchaseModel.find({
+          purchasesToBuy = await PurchaseModel.find({
             user: userId,
             status: STATUS_PURCHASE.IN_CART,
           })
@@ -285,37 +303,59 @@ const handleChatPrompt = async (req: Request, res: Response) => {
               .populate('product')
               .lean<IPurchasePopulated[]>()
             if (specificPurchases.length > 0) {
-              purchasesToOrder = specificPurchases
+              purchasesToBuy = specificPurchases
             } else {
               reply = `Sản phẩm "${extractResult}" không có trong giỏ hàng của bạn.`
             }
           }
         }
 
-        if (purchasesToOrder.length > 0) {
-          const purchaseIds = purchasesToOrder.map((item) => item._id)
-          const total = purchasesToOrder.reduce(
+        if (purchasesToBuy.length > 0) {
+          const total = purchasesToBuy.reduce(
             (sum, item) => sum + item.price * item.buy_count,
             0
           )
-          const orderDoc = await OrderModel.create({
-            userId,
+
+          // Đồng bộ hóa việc cập nhật số lượng sản phẩm
+          for (const item of purchasesToBuy) {
+            await ProductModel.findByIdAndUpdate(item.product._id, {
+              $inc: {
+                quantity: -item.buy_count,
+                sold: item.buy_count,
+              },
+            })
+          }
+
+          // Tạo đơn hàng mới
+          const newOrder = await OrderModel.create({
+            userId: userId,
             userName: userProfile.name,
-            items: purchasesToOrder.map((item) => ({
-              productId: item.product._id,
-              name: item.product.name,
-              price: item.price,
-              quantity: item.buy_count,
+            userPhone: userProfile.phone,
+            userAddress: userProfile.address,
+            items: purchasesToBuy.map((p) => ({
+              productId: p.product._id,
+              name: p.product.name,
+              price: p.price,
+              quantity: p.buy_count,
+              image: p.product.image,
             })),
-            total,
+            total: total,
             status: STATUS_PURCHASE.WAIT_FOR_CONFIRMATION,
-            purchaseIds,
+            purchaseIds: purchasesToBuy.map((p) => p._id),
           })
+
+          // Cập nhật trạng thái và liên kết đơn hàng cho các purchase
           await PurchaseModel.updateMany(
-            { _id: { $in: purchaseIds }, user: userId },
-            { status: STATUS_PURCHASE.WAIT_FOR_CONFIRMATION }
+            { _id: { $in: purchasesToBuy.map((p) => p._id) } },
+            {
+              $set: {
+                status: STATUS_PURCHASE.WAIT_FOR_CONFIRMATION,
+                order: newOrder._id,
+              },
+            }
           )
-          reply = `Đơn hàng của bạn đã được ghi nhận. Mã đơn hàng: ${orderDoc._id}. Tổng tiền: ${total.toLocaleString()}đ. Cảm ơn bạn!`
+
+          reply = `Đã tạo đơn hàng thành công với mã ${newOrder._id}. Cảm ơn bạn đã mua sắm!`
         } else if (!reply) {
           // Chỉ set reply này nếu chưa có reply lỗi từ trước
           reply = 'Giỏ hàng của bạn đang trống hoặc không có sản phẩm phù hợp.'

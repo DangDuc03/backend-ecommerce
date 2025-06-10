@@ -984,6 +984,219 @@ Chúng ta đã đi được một chặng đường dài và đã phân tích c�
 
 
 
+## 10. **luồng hoạt động của AI Chatbot trong hệ thống**
+
+**Sơ Đồ Luồng Hoạt Động (Flowchart)**
+
+```mermaid
+graph TD
+    subgraph "User Interface"
+        A[User gửi prompt]
+    end
+
+    subgraph "Backend: chatbot.controller.ts"
+        B(handleChatPrompt)
+        C{Xác thực và lấy Session}
+        D[Gửi prompt tới AI để\nnhận dạng Intent]
+        E{Switch-Case theo Intent}
+        F_SEARCH[Tìm sản phẩm trong DB]
+        F_CART[Thao tác giỏ hàng]
+        F_ORDER[Kiểm tra hoặc tạo đơn hàng]
+        F_PROFILE[Cập nhật Profile]
+        F_OTHER[Fallback: Trả lời chung]
+        G[Lấy ngữ cảnh hoặc lịch sử chat]
+        H[Xây dựng prompt hoàn chỉnh\ncho AI trả lời]
+        I[Gọi AI Service để\nnhận câu trả lời]
+        J[Lưu lại cuộc hội thoại\ncủa user và assistant]
+    end
+    
+    subgraph "External AI Service (Google)"
+        AI_INTENT(Detect Intent AI)
+        AI_REPLY(Send Prompt AI)
+    end
+
+    subgraph "Database (MongoDB)"
+        DB_Product(Product Model)
+        DB_Purchase(Purchase Model)
+        DB_Order(Order Model)
+        DB_User(User Model)
+        DB_Context(ChatContext Model)
+    end
+    
+    subgraph "User Interface"
+        K[Hiển thị câu trả lời\ncho người dùng]
+    end
+
+    A --> B
+    B --> C
+    C --> D
+    D --> AI_INTENT
+    AI_INTENT --> E
+    
+    E -- intent: 'find_product' --> F_SEARCH
+    E -- intent: 'add_to_cart', 'view_cart', ... --> F_CART
+    E -- intent: 'check_order_status', 'order', ... --> F_ORDER
+    E -- intent: 'update_profile' --> F_PROFILE
+    E -- intent: 'small_talk', 'greeting', ... --> F_OTHER
+    
+    F_SEARCH --> DB_Product
+    F_CART --> DB_Purchase
+    F_ORDER --> DB_Order & DB_Purchase
+    F_PROFILE --> DB_User
+    
+    F_SEARCH --> J
+    F_CART --> J
+    F_ORDER --> J
+    F_PROFILE --> J
+    
+    F_OTHER --> G
+    G --> DB_Context
+    G --> H
+    H --> I
+    I --> AI_REPLY
+    AI_REPLY --> J
+
+    J --> DB_Context
+    J --> K
+```
 
 
-***** Như đã phân tích, path phải là tên trường trong schema (product và order), còn ref (mà Mongoose sẽ tự động tra cứu từ model)*****
+ 
+**Hệ thống chatbot này là một ví dụ điển hình của kiến trúc"Intent-based".**
+-  Nó không chỉ đơn thuần là chuyển tiếp tin nhắn đến AI, mà sử dụng AI một cách thông minh ở bước đầu để phân loại yêu cầu. 
+- Sau đó, nó tự thực thi các logic nghiệp vụ đã được lập trình sẵn, truy vấn trực tiếp vào cơ sở dữ liệu để lấy dữ liệu chính xác và đáng tin cậy. Chỉ khi nào yêu cầu là một câu hỏi chung chung, nó mới "nhờ" AI sáng tạo ra câu trả lời.
+
+**Cách tiếp cận này vừa mạnh mẽ, vừa có thể kiểm soát được:**
+- Mạnh mẽ: Tận dụng khả năng hiểu ngôn ngữ tự nhiên của AI.
+Kiểm soát được: Các thao tác quan trọng (thêm vào giỏ, đặt hàng, kiểm tra đơn) hoàn toàn do code của bạn xử lý, đảm bảo tính đúng đắn và bảo mật, thay vì phó mặc cho AI "tự chế".
+
+
+
+
+## 11. **Giải Thích Tổng Quan Về Luồng Chatbot AI**
+Luồng chatbot này được thiết kế để hiểu và phản hồi các yêu cầu của người dùng một cách thông minh, hoạt động như một trợ lý ảo cho trang thương mại điện tử của bạn. Điểm cốt lõi của luồng này là sự kết hợp giữa hệ thống backend và một dịch vụ Xử lý Ngôn ngữ Tự nhiên (NLU - Natural Language Understanding) bên ngoài (ví dụ: Google Dialogflow).
+
+**Quy trình hoạt động chính như sau:**
+1. Tiếp nhận & Chuyển tiếp: Người dùng gửi một tin nhắn từ giao diện chat. Backend tiếp nhận tin nhắn này tại common-chatbot.route.ts và chuyển đến chatbot.controller.ts.
+2. Phân tích Ý định (Intent): Controller gửi văn bản của người dùng đến dịch vụ NLU. Dịch vụ này sẽ phân tích và trả về một "ý định" (intent) mà nó nhận dạng được (ví dụ: search_product, check_order_status, general_greeting) cùng với các "tham số" (parameters) liên quan (ví dụ: tên sản phẩm, mã đơn hàng).
+3. Xử lý Logic nghiệp vụ: Dựa trên intent nhận được, chatbot.controller.ts sẽ thực hiện các hành động tương ứng. Nó sử dụng một cấu trúc switch-case để rẽ nhánh xử lý:
+- Nếu là ý định tìm kiếm, nó sẽ truy vấn ProductModel trong database.
+- Nếu là ý định kiểm tra đơn hàng, nó sẽ truy vấn OrderModel.
+- Nếu là các câu chào hỏi chung, nó sẽ trả về một phản hồi được định sẵn.
+4. Tổng hợp & Phản hồi: Sau khi lấy được dữ liệu từ database hoặc xử lý xong logic, controller sẽ định dạng một câu trả lời thân thiện, có ý nghĩa và gửi ngược lại cho người dùng.
+
+Bằng cách này, chatbot có thể trả lời nhiều loại câu hỏi khác nhau của người dùng, từ tìm kiếm thông tin sản phẩm, kiểm tra tình trạng đơn hàng, cho đến các cuộc trò chuyện thông thường, giúp nâng cao trải nghiệm người dùng một cách đáng kể.
+Sơ Đồ Luồng Xử Lý Chatbot AI (Sequence Diagram)
+Sơ đồ dưới đây minh họa tuần tự các bước tương tác giữa các thành phần trong hệ thống khi người dùng gửi một yêu cầu cho chatbot.
+
+
+## 12. **Luồng Upload File (File Upload Flow)**
+- cho phép người dùng và admin tải lên hình ảnh cho sản phẩm và tài khoản. 
+- Hệ thống của bạn đang sử dụng thư viện formidable để xử lý upload file.
+- Có một file rất quan trọng là api-ecom/utils/upload.ts. Đây là nơi chứa logic cốt lõi của việc upload.
+
+### **Phân Tích Chi Tiết Luồng Upload**
+- gồm uploadFile (cho 1 file) và uploadManyFile (cho nhiều file)
+
+#### **Quy trình xử lý của uploadFile:**
+- Khởi tạo formidable: Khi uploadFile(req) được gọi từ một controller, nó tạo một instance của IncomingForm từ thư viện formidable.
+- Phân tích Request (form.parse): formidable bắt đầu "lắng nghe" và phân tích request đến. Nó sẽ tự động xử lý multipart/form-data, tách các trường văn bản (fields) và các file (files) ra riêng. File được tải lên sẽ được lưu vào một thư mục tạm của hệ điều hành.
+- Validate File:
+    - Sau khi parse xong, code sẽ thực hiện một loạt các bước kiểm tra quan trọng:
+        - Kiểm tra xem có file nào tên là image được gửi lên không.
+        - Kiểm tra type của file có chứa chuỗi "image" không (đảm bảo nó là ảnh).
+        - Kiểm tra size của file có nhỏ hơn 1MB không.
+        - Nếu có bất kỳ lỗi nào, nó sẽ reject một ErrorHandler với mã lỗi `UNPROCESSABLE_ENTITY`, ngăn chặn quá trình tiếp theo.
+
+- Di Chuyển và Đổi Tên File:
+    - Nếu file hợp lệ, hàm `upload(image, folder)` được gọi.
+    - Hàm này tạo một tên file mới hoàn toàn ngẫu nhiên bằng `uuidv4()` để tránh trùng lặp và các vấn đề bảo mật.
+    - sử dụng thư viện mv để di chuyển file từ thư mục tạm của hệ điều hành vào thư mục lưu trữ chính của dự án (ví dụ: upload/products).
+    - Thư mục đích sẽ được tự động tạo nếu chưa tồn tại bằng shelljs.mkdir.
+- Trả về Tên File Mới:
+    - Nếu di chuyển thành công, Promise sẽ resolve và trả về tên file mới đã được tạo ngẫu nhiên 
+    `(ví dụ: xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx.jpg)`. 
+    - Tên file này sau đó sẽ được lưu vào database trong controller
+
+- *Hàm `uploadManyFile` hoạt động tương tự nhưng xử lý một mảng các file và sử dụng `Promise.all` để thực hiện nhiều tác vụ upload một cách đồng thời.*
+
+- **Điểm nổi bật và thực hành tốt**:
+    - `Tạo tên file ngẫu nhiên`: Đây là một biện pháp bảo mật rất tốt.
+    - `Validate chặt chẽ`: Kiểm tra sự tồn tại, định dạng và kích thước file là cực kỳ quan trọng.
+    - `Tách logic`: Việc gói gọn logic upload vào một file utils giúp code sạch sẽ và dễ dàng tái sử dụng ở nhiều controller khác nhau.
+
+## 13. **Phân Tích Chi Tiết Luồng Tìm Kiếm Sản Phẩm**
+
+### 1. **API Endpoint Chính: GET /products (Hàm getProducts)**
+- Đây là trái tim của chức năng duyệt và tìm kiếm sản phẩm. Nó không chỉ đơn thuần trả về dữ liệu mà còn xử lý hàng loạt các tham số truy vấn (query params) để người dùng có thể tinh chỉnh kết quả một cách tối đa.
+- Xây dựng câu điều kiện (condition): Hàm này khởi tạo một object condition rỗng và dần dần thêm vào các điều kiện lọc dựa trên các query params nhận được:
+- Lọc theo tên (name): Nếu có name, nó sẽ tạo một biểu thức chính quy (regex) không phân biệt chữ hoa/thường để tìm kiếm các sản phẩm có tên chứa từ khóa.
+- Lọc theo danh mục (category): Lọc các sản phẩm thuộc về một category ID cụ thể.
+- Lọc theo khoảng giá (price_min, price_max): Xây dựng một object con để lọc các sản phẩm có giá lớn hơn hoặc bằng price_min và nhỏ hơn hoặc bằng price_max.
+- Lọc theo đánh giá (rating_filter): Chỉ lấy các sản phẩm có rating lớn hơn hoặc bằng một giá trị nào đó.
+- Loại trừ (exclude): Cho phép loại bỏ một sản phẩm cụ thể khỏi kết quả (thường dùng để hiển thị "các sản phẩm liên quan" trên trang chi tiết của một sản phẩm).
+- Sắp xếp (sort):
+- Hàm này cho phép sắp xếp kết quả dựa trên sort_by (ví dụ: price, createdAt, name) và order (asc, desc).
+- Nó có cơ chế phòng vệ thông minh: nếu sort_by hoặc order không hợp lệ, nó sẽ tự động sử dụng giá trị mặc định được định nghĩa trong hằng số SORT_BY và ORDER, tránh gây lỗi.
+- Phân trang (pagination):
+- Sử dụng limit (số sản phẩm mỗi trang) và page (trang hiện tại) để tính toán và áp dụng .skip() và .limit() vào câu truy vấn Mongoose.
+- Nó thực hiện một mẹo tối ưu hiệu năng rất hay: sử dụng Promise.all để thực hiện hai câu truy vấn song song: một để lấy danh sách sản phẩm của trang hiện tại và một để đếm tổng số sản phẩm (countDocuments) khớp với điều kiện lọc.
+- Dựa vào tổng số sản phẩm, nó tính toán page_size (tổng số trang) và trả về thông tin phân trang đầy đủ cho frontend.
+
+### 2. **API Endpoint Phụ: GET /search (Hàm searchProduct)**
+- Hàm searchProduct trong controller của bạn có vẻ là một phiên bản rút gọn hơn, chỉ tập trung vào việc tìm kiếm theo tên (name). Nó cũng sử dụng regex để tìm kiếm nhưng không hỗ trợ các tùy chọn lọc và sắp xếp phức tạp như getProducts. Có thể đây là một endpoint được sử dụng cho một thanh tìm kiếm nhanh (quick search) nào đó trên giao diện.
+
+## 14. **phân tích Luồng Cập nhật Thông tin Cá nhân.**
+
+- Có 3 endpoint đáng chú ý:
+    - PUT /: Đây là endpoint chính để cập nhật thông tin cá nhân. Nó được bảo vệ bởi middleware verifyAccessToken và gọi đến hàm userController.updateMe.
+    - POST /upload-avatar: Endpoint để tải lên ảnh đại diện, gọi đến userController.uploadAvatar.
+    - GET /: Endpoint để lấy thông tin chi tiết của chính người dùng đang đăng nhập, gọi đến userController.getDetailMySelf.
+
+### 1. **Phân Tích Chi Tiết Luồng Cập nhật Thông tin Cá nhân**
+- Hàm này dựa hoàn toàn vào req.user để xác định người dùng cần cập nhật. 
+- req.user được gắn vào request bởi middleware verifyAccessToken sau khi xác thực JWT thành công. Điều này đảm bảo người dùng chỉ có thể cập nhật thông tin của chính họ, không thể sửa thông tin của người khác.
+
+- Nó nhận các trường như name, address, phone, avatar từ req.body và dùng omitBy của Lodash để lọc ra những trường cần cập nhật,  tương tự như hàm updateUser của admin.
+
+### 2. **Xử lý Thay đổi Mật khẩu (Phần quan trọng nhất)**
+
+- Bước 1: Xác thực mật khẩu cũ. Nó băm (hashValue) mật khẩu cũ mà người dùng gửi lên và so sánh với mật khẩu đã được băm trong userDB.password.
+
+- Bước 2: Cập nhật mật khẩu mới.
+- Nếu mật khẩu cũ khớp, nó sẽ băm mật khẩu mới (new_password) và gán giá trị đã băm đó vào user.password, sẵn sàng để cập nhật vào database.
+- Nếu mật khẩu cũ không khớp, nó sẽ ngay lập tức ném ra một lỗi ErrorHandler với mã 422 Unprocessable Entity và thông báo "Password không đúng", dừng toàn bộ quá trình.
+
+3. Cập nhật vào Database:
+- Sau khi đã xử lý xong phần mật khẩu (nếu có), hàm sẽ thực hiện UserModel.findByIdAndUpdate để cập nhật các thông tin mới vào database, sử dụng userDB._id để đảm bảo cập nhật đúng người dùng.
+- Cuối cùng, nó trả về thông tin người dùng đã được cập nhật (đã loại bỏ mật khẩu) cho client.
+
+## 15. **Phân Tích Tổng Quan Middleware và Xử Lý Lỗi**
+- Hãy tưởng tượng mỗi request từ client gửi đến server như một kiện hàng đi trên một dây chuyền sản xuất. Trước khi đến được khâu cuối cùng (Controller), nó phải đi qua hàng loạt các trạm kiểm tra chất lượng (Middleware).
+
+-### **Dây chuyền hoạt động như sau:**
+1. Cổng An Ninh: Xác thực (auth.middleware.ts)
+- verifyAccessToken: : Middleware này kiểm tra header Authorization, giải mã JWT : 
+    - Nếu token hợp lệ, nó sẽ lấy id từ token, tìm người dùng tương ứng trong database và gắn toàn bộ thông tin người dùng vào req.user.
+    - Nếu token không hợp lệ hoặc không có, request sẽ bị từ chối ngay lập tức với lỗi UNAUTHORIZED.
+- verifyAdmin: Middleware này chỉ được dùng cho các route của admin.Nó hoạt động rất đơn giản: kiểm tra xem req.user.roles (đã được gắn ở bước trước) có chứa chuỗi "admin" hay không. Nếu không, request bị từ chối với lỗi FORBIDDEN. 
+
+2. **Trạm KCS: Kiểm tra Dữ liệu (helpers.middleware.ts & *.middleware.ts)**
+- Bước 1:   Các file như user.middleware.ts, product.middleware.ts định nghĩa các quy tắc (ví dụ: body('email').isEmail(), body('password').isLength({ min: 6 })).
+
+- Bước 2:  Middleware entityValidator trong helpers.middleware.ts sẽ thực thi các quy tắc đã được định nghĩa. Nó sử dụng validationResult(req) của thư viện express-validator
+    -  Nếu có bất kỳ lỗi nào, nó sẽ tạo một ErrorHandler với mã 422 Unprocessable Entity và một object chứa chi tiết lỗi, sau đó chuyển đến trạm xử lý khủng hoảng cuối cùng. 
+    -  Nếu không có lỗi, nó cho đi tiếp (next()).
+
+3.  **: wrapAsync (utils/response.ts)**
+    - Thay vì phải viết try...catch trong MỌI hàm controller (rất dài dòng và lặp lại), tất cả các hàm controller đều được "bọc" trong wrapAsync.
+    - wrapAsync là một hàm bậc cao, nó nhận một hàm controller làm đối số và trả về một hàm mới
+    -  Hàm mới này sẽ thực thi hàm controller gốc và nếu có bất kỳ lỗi nào xảy ra (ví dụ: lỗi từ database, lỗi logic), phương thức .catch(next) sẽ tự động bắt lấy lỗi đó và chuyển thẳng đếnBộ xử lý lỗi trung tâm (utils/response.ts)
+
+4. **Bộ xử lý lỗi trung tâm (utils/response.ts)**
+- ErrorHandler: Đây là một class Error tùy chỉnh. Nó cho phép bạn tạo ra các lỗi có cấu trúc, chứa cả status (mã HTTP) và error (thông điệp hoặc object lỗi chi tiết).
+- responseError: Đây chính là bộ xử lý lỗi trung tâm. Nó nhận vào lỗi được next(error) chuyển đến: 
+    - Nó kiểm tra xem lỗi có phải là một instanceof ErrorHandler không. Nếu đúng, nó sẽ lấy status và error từ đó để trả về một response JSON có cấu trúc, rõ ràng cho client.
+    -Nếu đó là một lỗi không lường trước (không phải ErrorHandler), nó sẽ trả về một lỗi chung 500 INTERNAL_SERVER_ERROR để che giấu chi tiết lỗi nhạy cảm khỏi người dùng cuối.
+
+*note riêng* : *** Như đã phân tích, path phải là tên trường trong schema (product và order), còn ref (mà Mongoose sẽ tự động tra cứu từ model)**
