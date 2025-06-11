@@ -43,6 +43,12 @@ declare global {
   }
 }
 
+const sanitizeUser = (user: IUser) => {
+  if (!user) return null
+  const { _id, name, email, avatar, address, phone, roles } = user
+  return { _id, name, email, avatar, address, phone, roles }
+}
+
 const handleChatPrompt = async (req: Request, res: Response) => {
   const { prompt } = req.body
   const userId = req.user?._id.toString()
@@ -96,7 +102,9 @@ const handleChatPrompt = async (req: Request, res: Response) => {
       res.cookie('sessionId', sessionId, { httpOnly: true })
     }
 
-    return res.status(401).json({ reply, intent, sessionId, user: req.user })
+    return res
+      .status(401)
+      .json({ reply, intent, sessionId, user: sanitizeUser(req.user) })
   }
 
   // Xử lý các intent
@@ -153,7 +161,7 @@ const handleChatPrompt = async (req: Request, res: Response) => {
       if (newSessionIdCreated) {
         res.cookie('sessionId', sessionId, { httpOnly: true })
       }
-      return res.json({ reply, intent, sessionId, user: req.user })
+      return res.json({ reply, intent, sessionId, user: sanitizeUser(req.user) })
     }
 
     case 'view_cart': {
@@ -205,7 +213,13 @@ const handleChatPrompt = async (req: Request, res: Response) => {
       if (newSessionIdCreated) {
         res.cookie('sessionId', sessionId, { httpOnly: true })
       }
-      return res.json({ reply, intent, sessionId, orders, user: req.user })
+      return res.json({
+        reply,
+        intent,
+        sessionId,
+        orders,
+        user: sanitizeUser(req.user),
+      })
     }
 
     case 'check_order_status': {
@@ -315,6 +329,13 @@ const handleChatPrompt = async (req: Request, res: Response) => {
             (sum, item) => sum + item.price * item.buy_count,
             0
           )
+          const purchaseIdsToUpdate = purchasesToBuy.map((p) => p._id)
+
+          // Cập nhật trạng thái cho các purchase trước
+          await PurchaseModel.updateMany(
+            { _id: { $in: purchaseIdsToUpdate } },
+            { $set: { status: STATUS_PURCHASE.WAIT_FOR_CONFIRMATION } }
+          )
 
           // Đồng bộ hóa việc cập nhật số lượng sản phẩm
           for (const item of purchasesToBuy) {
@@ -341,21 +362,18 @@ const handleChatPrompt = async (req: Request, res: Response) => {
             })),
             total: total,
             status: STATUS_PURCHASE.WAIT_FOR_CONFIRMATION,
-            purchaseIds: purchasesToBuy.map((p) => p._id),
+            purchaseIds: purchaseIdsToUpdate,
           })
 
-          // Cập nhật trạng thái và liên kết đơn hàng cho các purchase
+          // Cập nhật liên kết đơn hàng cho các purchase
           await PurchaseModel.updateMany(
-            { _id: { $in: purchasesToBuy.map((p) => p._id) } },
-            {
-              $set: {
-                status: STATUS_PURCHASE.WAIT_FOR_CONFIRMATION,
-                order: newOrder._id,
-              },
-            }
+            { _id: { $in: purchaseIdsToUpdate } },
+            { $set: { order: newOrder._id } }
           )
 
-          reply = `Đã tạo đơn hàng thành công với mã ${newOrder._id}. Cảm ơn bạn đã mua sắm!`
+          reply = `Đã tạo đơn hàng thành công với mã ${
+            newOrder._id
+          }. Cảm ơn bạn đã mua sắm!`
         } else if (!reply) {
           // Chỉ set reply này nếu chưa có reply lỗi từ trước
           reply = 'Giỏ hàng của bạn đang trống hoặc không có sản phẩm phù hợp.'
@@ -481,8 +499,8 @@ const handleChatPrompt = async (req: Request, res: Response) => {
         reply,
         intent,
         sessionId,
-        user: updatedUser,
-        profile: updatedUser,
+        user: sanitizeUser(updatedUser),
+        profile: sanitizeUser(updatedUser),
       })
     }
 
@@ -532,7 +550,7 @@ const handleChatPrompt = async (req: Request, res: Response) => {
       if (newSessionIdCreated) {
         res.cookie('sessionId', sessionId, { httpOnly: true })
       }
-      return res.json({ reply, intent, sessionId, user: req.user })
+      return res.json({ reply, intent, sessionId, user: sanitizeUser(req.user) })
     }
 
     case 'suggest_product': {
@@ -609,7 +627,7 @@ const handleChatPrompt = async (req: Request, res: Response) => {
         intent,
         sessionId,
         suggestedProducts,
-        user: req.user,
+        user: sanitizeUser(req.user),
       })
     }
 
@@ -630,7 +648,7 @@ const handleChatPrompt = async (req: Request, res: Response) => {
       if (newSessionIdCreated) {
         res.cookie('sessionId', sessionId, { httpOnly: true })
       }
-      return res.json({ reply, intent, sessionId, user: req.user })
+      return res.json({ reply, intent, sessionId, user: sanitizeUser(req.user) })
   }
 
   // Fallback for intents not returning immediately
@@ -649,7 +667,7 @@ const handleChatPrompt = async (req: Request, res: Response) => {
   if (newSessionIdCreated) {
     res.cookie('sessionId', sessionId, { httpOnly: true })
   }
-  return res.json({ reply, intent, sessionId, user: req.user })
+  return res.json({ reply, intent, sessionId, user: sanitizeUser(req.user) })
 }
 
 const getChatHistory = async (req: Request, res: Response) => {
