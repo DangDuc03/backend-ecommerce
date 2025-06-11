@@ -55,10 +55,10 @@
     ```
 
 4.  **Thiết lập biến môi trường:**
-    Tạo một file tên là `.env` ở thư mục gốc của dự án và sao chép nội dung từ file `.env.example` (nếu có) hoặc sử dụng cấu trúc dưới đây.
+    Tạo một file tên là `.env` ở thư mục gốc của dự án và sao chép nội dung từ file `.env.example` hoặc sử dụng cấu trúc dưới đây.
 
     ```env
-### Tạo file `.env` (hoặc `.env.production` khi deploy)
+**Tạo file `.env` (hoặc `.env.production` khi deploy)**
 ```env
 PORT=4000
 SECRET_KEY_JWT=your_jwt_secret
