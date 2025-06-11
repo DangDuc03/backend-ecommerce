@@ -12,6 +12,8 @@ export interface IUser extends Document {
   avatar?: string
   isOnline?: boolean
   lastActive?: Date
+  createdAt?: Date
+  updatedAt?: Date
 }
 
 const UserSchema = new Schema<IUser>(
