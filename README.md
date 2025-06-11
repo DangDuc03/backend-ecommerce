@@ -58,16 +58,13 @@
     Tạo một file tên là `.env` ở thư mục gốc của dự án và sao chép nội dung từ file `.env.example` (nếu có) hoặc sử dụng cấu trúc dưới đây.
 
     ```env
-### Tạo file `.env` (hoặc `.env.production` khi deploy)
-```env
-PORT=4000
-SECRET_KEY_JWT=your_jwt_secret
-USERNAME_DB=your_mongodb_user
-PASSWORD_DB=your_mongodb_password
-OPENAI_API_KEY=your_openai_key
-GEMINI_API_KEY=your_gemini_key
-AI_PROVIDER=gemini # hoặc openai
-```
+    PORT=4000
+    SECRET_KEY_JWT=your_jwt_secret
+    USERNAME_DB=your_mongodb_user
+    PASSWORD_DB=your_mongodb_password
+    OPENAI_API_KEY=your_openai_key
+    GEMINI_API_KEY=your_gemini_key
+    AI_PROVIDER=gemini # hoặc openai
     ```
     > **Lưu ý:** Hãy thay thế các giá trị trong dấu ngoặc kép (`""`) bằng thông tin cấu hình thực tế của bạn.
 
@@ -105,10 +102,6 @@ Dự án được cấu trúc theo mô hình gần với MVC (Model-View-Control
 ├── tsconfig.json       // Cấu hình cho TypeScript compiler
 └── README.md           // Chính là file này
 ```
-
-## 🧪 Thử Nghiệm API
-
-Để thuận tiện cho việc kiểm tra các API, dự án có đính kèm một bộ sưu tập cho **Postman**. Bạn có thể nhập file `Ecommerce.postman_collection.json` vào Postman để có ngay danh sách các endpoint đã được cài đặt sẵn.
 
 ---
 **dangcongduc © 2025 E-Commerce API**
