@@ -27,4 +27,13 @@ const OrderSchema = new Schema<IOrder>({
     purchaseIds: [{ type: Schema.Types.ObjectId, ref: 'purchases' }]
 });
 
+// Middleware để tự động xóa các purchase liên quan SAU KHI một order bị xóa
+OrderSchema.post('findOneAndDelete', async function (doc) {
+    // doc ở đây là order vừa bị xóa
+    if (doc && doc.purchaseIds && doc.purchaseIds.length > 0) {
+        const PurchaseModel = mongoose.model('purchases');
+        await PurchaseModel.deleteMany({ _id: { $in: doc.purchaseIds } });
+    }
+});
+
 export default mongoose.model<IOrder>('Order', OrderSchema); 

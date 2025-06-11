@@ -8,7 +8,7 @@ const commonChatbotRouter = Router()
 
 commonChatbotRouter.post(
   '/chatbot',
-  authMiddleware.verifyAccessToken,
+  authMiddleware.verifyAccessTokenOptional,
   wrapAsync(chatbotController.handleChatPrompt)
 )
 

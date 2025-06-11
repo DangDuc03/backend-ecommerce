@@ -122,32 +122,32 @@ export const buyProducts = async (req: Request, res: Response) => {
         throw new ErrorHandler(STATUS.NOT_ACCEPTABLE, `Số lượng mua sản phẩm ${product.name} vượt quá số lượng tồn kho.`)
       }
 
-      let data = await PurchaseModel.findOneAndUpdate(
-        {
+        let data = await PurchaseModel.findOneAndUpdate(
+          {
           user: userProfile._id,
-          status: STATUS_PURCHASE.IN_CART,
+            status: STATUS_PURCHASE.IN_CART,
           product: item.product_id,
-        },
-        {
-          buy_count: item.buy_count,
-          status: STATUS_PURCHASE.WAIT_FOR_CONFIRMATION,
-        },
+          },
+          {
+            buy_count: item.buy_count,
+            status: STATUS_PURCHASE.WAIT_FOR_CONFIRMATION,
+          },
         { new: true }
       ).populate('product').lean<IPurchasePopulated>()
 
-      if (!data) {
+        if (!data) {
         const newPurchase = await new PurchaseModel({
           user: userProfile._id,
-          product: item.product_id,
-          buy_count: item.buy_count,
-          price: product.price,
-          price_before_discount: product.price_before_discount,
-          status: STATUS_PURCHASE.WAIT_FOR_CONFIRMATION,
+            product: item.product_id,
+            buy_count: item.buy_count,
+            price: product.price,
+            price_before_discount: product.price_before_discount,
+            status: STATUS_PURCHASE.WAIT_FOR_CONFIRMATION,
         }).save()
         data = await PurchaseModel.findById(newPurchase._id).populate('product').lean<IPurchasePopulated>()
-      }
+        }
       purchasesToBuy.push(data)
-      const newQuantity = product.quantity - item.buy_count
+        const newQuantity = product.quantity - item.buy_count
       await ProductModel.findByIdAndUpdate(item.product_id, {
         quantity: newQuantity < 0 ? 0 : newQuantity,
         $inc: { sold: item.buy_count },
@@ -163,9 +163,9 @@ export const buyProducts = async (req: Request, res: Response) => {
       userId: userProfile._id,
       userName: userProfile.name,
       items: purchasesToBuy.map((item) => ({
-        productId: item.product._id,
-        name: item.product.name,
-        price: item.price,
+      productId: item.product._id,
+      name: item.product.name,
+      price: item.price,
         quantity: item.buy_count,
       })),
       total: purchasesToBuy.reduce((sum, item) => sum + item.price * item.buy_count, 0),
@@ -189,10 +189,11 @@ export const getPurchases = async (req: Request, res: Response) => {
   const condition: any = {
     user: req.user._id,
   }
-  if (Number(status) !== STATUS_PURCHASE.ALL) {
-    condition.status = status
+
+  if (Number(status) === STATUS_PURCHASE.ALL) {
+    condition.status = { $ne: STATUS_PURCHASE.IN_CART }
   } else {
-    condition.status = { $ne: STATUS_PURCHASE.ALL }
+    condition.status = status
   }
 
   const purchases = await PurchaseModel.find(condition)

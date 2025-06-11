@@ -51,6 +51,33 @@ const verifyAccessToken = async (
     }
 }
 
+const verifyAccessTokenOptional = async (
+  req: Request,
+  res: Response,
+  next: NextFunction
+) => {
+  const access_token = req.headers.authorization?.replace('Bearer ', '')
+  if (!access_token) {
+    return next()
+  }
+  try {
+    const decoded = (await verifyToken(
+      access_token,
+      config.SECRET_KEY
+    )) as PayloadToken
+    req.jwtDecoded = decoded
+
+    const user = await UserModel.findById(decoded.id).lean<IUser>()
+    if (user) {
+      req.user = user
+    }
+    next()
+  } catch (error) {
+    // Bỏ qua lỗi token không hợp lệ và cho qua
+    next()
+  }
+}
+
 const verifyRefreshToken = async (
   req: Request,
   res: Response,
@@ -129,6 +156,7 @@ const authMiddleware = {
   registerRules,
   loginRules,
   verifyRefreshToken,
+  verifyAccessTokenOptional,
 }
 
 export default authMiddleware

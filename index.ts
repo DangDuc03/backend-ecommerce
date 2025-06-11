@@ -32,6 +32,7 @@ if (fs.existsSync(uploadPath)) {
   console.log('Files in upload directory:', fs.readdirSync(uploadPath))
 }
 
+
 const handlerImage: any = Object.values(FOLDERS).reduce(
   (result: any, current: any) => {
     return [
